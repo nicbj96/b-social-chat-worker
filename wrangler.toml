@@ -8,6 +8,13 @@ binding = "AI"
 [vars]
 SUPABASE_URL = "https://rbengtfrthqdfbcdcugp.supabase.co"
 
-# SUPABASE_KEY skal tilføjes som secret via:
-# npx wrangler secret put SUPABASE_KEY
-# (brug din Supabase anon key)
+# Secrets (set via `npx wrangler secret put <NAME>`):
+#   SUPABASE_KEY      — Supabase anon or service_role key
+#   VAPID_PUBLIC_KEY  — Web Push public key
+#   VAPID_PRIVATE_KEY — Web Push private key (d parameter)
+#   VAPID_SUBJECT     — mailto:... contact for push services
+#   PUSH_ADMIN_KEY    — admin auth for /push/broadcast (optional)
+
+# Weekly digest: every Friday 17:00 UTC (18:00 CET / 19:00 CEST)
+[triggers]
+crons = ["0 17 * * 5"]

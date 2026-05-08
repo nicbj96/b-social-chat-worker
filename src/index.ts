@@ -6,12 +6,17 @@ import {
   searchRoutes,
   searchPlaces,
 } from "./supabase-queries";
+import { sendWebPush, type PushMessage } from "./webpush";
 
 // Env bindings
 interface Env {
   AI: any; // Workers AI binding
   SUPABASE_URL: string;
   SUPABASE_KEY: string;
+  VAPID_PUBLIC_KEY: string;
+  VAPID_PRIVATE_KEY: string;
+  VAPID_SUBJECT: string;
+  PUSH_ADMIN_KEY?: string;
 }
 
 // Chat message type
@@ -26,7 +31,7 @@ interface ChatMessage {
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*", // Skift til "https://b-social.net" i produktion
   "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Admin-Key",
 };
 
 export default {
@@ -43,19 +48,230 @@ export default {
       return handleChat(request, env);
     }
 
+    // Embed one or many texts — returns 1024-dim bge-m3 vectors
+    if (url.pathname === "/embed" && request.method === "POST") {
+      return handleEmbed(request, env);
+    }
+
+    // Semantic search endpoint — callable by frontend directly
+    if (url.pathname === "/search" && request.method === "POST") {
+      return handleSemanticSearch(request, env);
+    }
+
+    // Push notifications
+    if (url.pathname === "/push/send" && request.method === "POST") {
+      return handlePushSend(request, env);
+    }
+    if (url.pathname === "/push/broadcast" && request.method === "POST") {
+      return handlePushBroadcast(request, env);
+    }
+
     if (url.pathname === "/health") {
       return jsonResponse({ status: "ok", service: "b-social-chat" });
     }
 
     return jsonResponse({ error: "Not found" }, 404);
   },
+
+  // Scheduled weekly digest (configured in wrangler.toml)
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(runWeeklyDigest(env));
+  },
 };
+
+// ── Push send helpers ─────────────────────────────────────────────────
+
+async function fetchSubsForUser(env: Env, userId: string) {
+  const r = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/push_subscriptions?user_id=eq.${userId}&enabled=eq.true&select=endpoint,p256dh,auth`,
+    { headers: { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}` } }
+  );
+  return (await r.json()) as Array<{ endpoint: string; p256dh: string; auth: string }>;
+}
+
+async function disableSubscription(env: Env, endpoint: string) {
+  await fetch(`${env.SUPABASE_URL}/rest/v1/push_subscriptions?endpoint=eq.${encodeURIComponent(endpoint)}`, {
+    method: "PATCH",
+    headers: { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+    body: JSON.stringify({ enabled: false }),
+  });
+}
+
+function vapidFromEnv(env: Env) {
+  return { publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY, subject: env.VAPID_SUBJECT };
+}
+
+async function handlePushSend(request: Request, env: Env): Promise<Response> {
+  try {
+    const body = (await request.json()) as { user_id: string; message: PushMessage };
+    if (!body.user_id || !body.message?.title) return jsonResponse({ error: "user_id + message.title required" }, 400);
+
+    const subs = await fetchSubsForUser(env, body.user_id);
+    if (subs.length === 0) return jsonResponse({ sent: 0, reason: "no_subscriptions" });
+
+    const vapid = vapidFromEnv(env);
+    const results = await Promise.all(subs.map(async (s) => {
+      try {
+        const r = await sendWebPush(s, body.message, vapid);
+        if (r.status === 404 || r.status === 410) await disableSubscription(env, s.endpoint);
+        return { endpoint: s.endpoint.slice(-12), ok: r.ok, status: r.status };
+      } catch (e: any) {
+        return { endpoint: s.endpoint.slice(-12), ok: false, error: e.message };
+      }
+    }));
+    return jsonResponse({ sent: results.filter(r => r.ok).length, failed: results.filter(r => !r.ok).length, results });
+  } catch (err: any) {
+    return jsonResponse({ error: "push send failed", details: err.message }, 500);
+  }
+}
+
+// Admin-authenticated broadcast (for weekly digest / announcements)
+async function handlePushBroadcast(request: Request, env: Env): Promise<Response> {
+  const adminKey = request.headers.get("X-Admin-Key");
+  if (!env.PUSH_ADMIN_KEY || adminKey !== env.PUSH_ADMIN_KEY) return jsonResponse({ error: "unauthorized" }, 401);
+  try {
+    const body = (await request.json()) as { message: PushMessage; where?: { user_ids?: string[] } };
+    if (!body.message?.title) return jsonResponse({ error: "message.title required" }, 400);
+
+    let url = `${env.SUPABASE_URL}/rest/v1/push_subscriptions?enabled=eq.true&select=endpoint,p256dh,auth`;
+    if (body.where?.user_ids?.length) url += `&user_id=in.(${body.where.user_ids.map(i => `"${i}"`).join(",")})`;
+
+    const r = await fetch(url, { headers: { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}` } });
+    const subs = (await r.json()) as Array<{ endpoint: string; p256dh: string; auth: string }>;
+
+    const vapid = vapidFromEnv(env);
+    let sent = 0, failed = 0;
+    for (const s of subs) {
+      try {
+        const r = await sendWebPush(s, body.message, vapid);
+        if (r.ok) sent++; else { failed++; if (r.status === 404 || r.status === 410) await disableSubscription(env, s.endpoint); }
+      } catch { failed++; }
+    }
+    return jsonResponse({ sent, failed, total: subs.length });
+  } catch (err: any) {
+    return jsonResponse({ error: "broadcast failed", details: err.message }, 500);
+  }
+}
+
+async function runWeeklyDigest(env: Env) {
+  // Send "5 events denne weekend" to all subscribed users
+  const message: PushMessage = {
+    title: "B-Social — Weekend guide 🎉",
+    body: "Se hvad der sker i weekenden. Nye events matcher dine interesser.",
+    url: "/feed",
+    tag: "weekly-digest",
+  };
+  const r = await fetch(`${env.SUPABASE_URL}/rest/v1/push_subscriptions?enabled=eq.true&select=endpoint,p256dh,auth`, {
+    headers: { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}` },
+  });
+  const subs = (await r.json()) as Array<{ endpoint: string; p256dh: string; auth: string }>;
+  const vapid = vapidFromEnv(env);
+  for (const s of subs) {
+    try { await sendWebPush(s, message, vapid); } catch {}
+  }
+}
+
+// ── Embedding endpoint ─────────────────────────────────────────────
+// bge-m3 is multilingual (strong for Danish), 1024-dim cosine embeddings
+async function handleEmbed(request: Request, env: Env): Promise<Response> {
+  try {
+    const body = (await request.json()) as { text?: string; texts?: string[] };
+    const texts = body.texts ?? (body.text ? [body.text] : []);
+    if (texts.length === 0) return jsonResponse({ error: "text or texts required" }, 400);
+    if (texts.length > 100) return jsonResponse({ error: "max 100 texts per call" }, 400);
+
+    const result: any = await env.AI.run("@cf/baai/bge-m3", { text: texts });
+    // bge-m3 returns { data: number[][] } or { shape, data }
+    const embeddings = result?.data ?? [];
+    return jsonResponse({ embeddings, count: embeddings.length, dim: embeddings[0]?.length ?? 0 });
+  } catch (err: any) {
+    return jsonResponse({ error: "embed failed", details: err.message }, 500);
+  }
+}
+
+// ── Semantic search endpoint ───────────────────────────────────────
+// Query text → embedding → pgvector match via Supabase RPC
+async function handleSemanticSearch(request: Request, env: Env): Promise<Response> {
+  try {
+    const body = (await request.json()) as {
+      query: string;
+      kind?: "events" | "places" | "both";
+      count?: number;
+      threshold?: number;
+      country?: string;
+      bbox?: { n: number; s: number; e: number; w: number };
+    };
+    if (!body.query) return jsonResponse({ error: "query required" }, 400);
+
+    const emb: any = await env.AI.run("@cf/baai/bge-m3", { text: [body.query] });
+    const vec = emb?.data?.[0];
+    if (!vec) return jsonResponse({ error: "embedding failed" }, 500);
+
+    const kind = body.kind ?? "both";
+    const count = body.count ?? 10;
+    const threshold = body.threshold ?? 0.3;
+
+    const sbHeaders = {
+      apikey: env.SUPABASE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+    };
+
+    const out: any = { events: [], places: [] };
+
+    if (kind === "events" || kind === "both") {
+      const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_events`, {
+        method: "POST",
+        headers: sbHeaders,
+        body: JSON.stringify({
+          query_embedding: vec,
+          match_count: count,
+          match_threshold: threshold,
+          filter_country: body.country ?? null,
+        }),
+      });
+      out.events = await r.json();
+    }
+    if (kind === "places" || kind === "both") {
+      const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_places`, {
+        method: "POST",
+        headers: sbHeaders,
+        body: JSON.stringify({
+          query_embedding: vec,
+          match_count: count,
+          match_threshold: threshold,
+          filter_country: body.country ?? null,
+          filter_bbox_n: body.bbox?.n ?? null,
+          filter_bbox_s: body.bbox?.s ?? null,
+          filter_bbox_e: body.bbox?.e ?? null,
+          filter_bbox_w: body.bbox?.w ?? null,
+        }),
+      });
+      out.places = await r.json();
+    }
+    return jsonResponse(out);
+  } catch (err: any) {
+    return jsonResponse({ error: "search failed", details: err.message }, 500);
+  }
+}
 
 async function handleChat(request: Request, env: Env): Promise<Response> {
   try {
     const body = (await request.json()) as {
       messages?: { role: string; content: string }[];
       message?: string;
+      context?: {
+        page?: string;
+        pageType?: string;
+        active_tags?: string[];
+        viewport?: { lat: number; lng: number; zoom: number };
+        user_prefs?: { interest_slugs?: string[]; city?: string; group_mode?: string };
+        entity_id?: string;
+        entity_type?: string;
+        recent_views?: { id: string; type: string; tags: string[] }[];
+        last_session?: string;
+        search_query?: string;
+      };
     };
 
     // Support both { messages: [...] } and { message: "..." }
@@ -72,14 +288,96 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
       return jsonResponse({ error: "Mangler 'message' eller 'messages' felt" }, 400);
     }
 
+    // Build page-aware context injection for the system prompt
+    const ctx = body.context || {};
+    const contextLines: string[] = [];
+    if (ctx.pageType) {
+      const pageLabels: Record<string, string> = {
+        feed: "forsiden (Feed)", map: "kortet (Kort)", explore: "Udforsk-siden",
+        event: "en event-detalje", place: "en steds-detalje", search: "søgesiden",
+      };
+      contextLines.push(`Brugerens nuværende side: ${pageLabels[ctx.pageType] || ctx.pageType}.`);
+    }
+    if (ctx.active_tags && ctx.active_tags.length > 0) {
+      contextLines.push(`Aktive filtre på siden: ${ctx.active_tags.join(", ")}.`);
+    }
+    if (ctx.viewport) {
+      contextLines.push(`Kortets centrum: lat ${ctx.viewport.lat.toFixed(4)}, lng ${ctx.viewport.lng.toFixed(4)}, zoom ${ctx.viewport.zoom}.`);
+    }
+    if (ctx.user_prefs) {
+      const p = ctx.user_prefs;
+      if (p.city) contextLines.push(`Brugerens by: ${p.city}.`);
+      if (p.interest_slugs?.length) contextLines.push(`Brugerens interesser: ${p.interest_slugs.join(", ")}.`);
+      if (p.group_mode) contextLines.push(`Bruger foretrækker: ${p.group_mode}.`);
+    }
+    // Phase 5: behavioral history — most recently viewed places/events
+    if (ctx.recent_views && ctx.recent_views.length > 0) {
+      const recLabels = ctx.recent_views
+        .map((v: { id: string; type: string; tags: string[] }) =>
+          `${v.type === "place" ? "Sted" : "Event"} (${v.tags.slice(0, 2).join(", ") || v.id.slice(0, 8)})`
+        )
+        .join("; ");
+      contextLines.push(`Senest besøgte: ${recLabels}.`);
+    }
+    // Phase 5: session memory from previous conversation
+    if (ctx.last_session) {
+      contextLines.push(`Forrige session: ${String(ctx.last_session).slice(0, 200)}`);
+    }
+    // Step 5: entity context — fetch current event/place name from Supabase
+    if (ctx.entity_id && (ctx.entity_type === 'event' || ctx.entity_type === 'place')) {
+      try {
+        const sbUrl = env.SUPABASE_URL;
+        const sbKey = env.SUPABASE_KEY;
+        const headers = { apikey: sbKey, Authorization: `Bearer ${sbKey}` };
+        if (ctx.entity_type === 'event') {
+          const r = await fetch(
+            `${sbUrl}/rest/v1/events?id=eq.${ctx.entity_id}&select=title,location,tags&limit=1`,
+            { headers }
+          );
+          const rows: any[] = await r.json();
+          const row = rows[0];
+          if (row?.title) {
+            const tags = Array.isArray(row.tags) ? row.tags.slice(0,4).join(', ') : '';
+            contextLines.push(`Brugeren ser på event: "${row.title}"${row.location ? ` (${row.location})` : ''} ${tags ? `— tags: ${tags}` : ''}.`);
+          }
+        } else {
+          const r = await fetch(
+            `${sbUrl}/rest/v1/places?id=eq.${ctx.entity_id}&select=name,city,main_categories&limit=1`,
+            { headers }
+          );
+          const rows: any[] = await r.json();
+          const row = rows[0];
+          if (row?.name) {
+            const cats = Array.isArray(row.main_categories) ? row.main_categories.slice(0,3).join(', ') : '';
+            contextLines.push(`Brugeren ser på sted: "${row.name}"${row.city ? ` i ${row.city}` : ''} ${cats ? `— kategorier: ${cats}` : ''}.`);
+          }
+        }
+      } catch {}
+    }
+    // Step 6: time + season awareness (server-side, always accurate)
+    {
+      const now = new Date();
+      const days = ['søndag','mandag','tirsdag','onsdag','torsdag','fredag','lørdag'];
+      const dayName = days[now.getDay()];
+      const h = now.getHours();
+      const timeOfDay = h < 6 ? 'nat' : h < 12 ? 'morgen' : h < 17 ? 'eftermiddag' : h < 21 ? 'aften' : 'sen aften';
+      const mo = now.getMonth();
+      const season = mo >= 2 && mo <= 4 ? 'forår' : mo >= 5 && mo <= 7 ? 'sommer' : mo >= 8 && mo <= 10 ? 'efterår' : 'vinter';
+      const isWeekend = now.getDay() === 0 || now.getDay() === 6;
+      contextLines.push(`Tidspunkt: ${dayName} ${timeOfDay}, ${season}${isWeekend ? ', weekend' : ', hverdag'}.`);
+    }
+    const contextNote = contextLines.length > 0
+      ? `\n## Nuværende kontekst:\n${contextLines.map(l => `- ${l}`).join("\n")}`
+      : "";
+
     // Build the full conversation with system prompt
     const messages: ChatMessage[] = [
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: SYSTEM_PROMPT + contextNote },
       ...userMessages,
     ];
 
     // First AI call — may include tool calls
-    const aiResponse = await env.AI.run("@cf/moonshotai/kimi-k2.5", {
+    const aiResponse = await env.AI.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
       messages,
       tools: TOOLS,
       tool_choice: "auto",
@@ -96,7 +394,10 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
         tool_calls: aiResponse.tool_calls,
       });
 
-      // Execute each tool call
+      // Execute each tool call; collect place/event IDs for structured response
+      const collectedPlaceIds: string[] = [];
+      const collectedEventIds: string[] = [];
+
       for (const toolCall of aiResponse.tool_calls) {
         const fnName = toolCall.function.name;
         const fnArgs =
@@ -107,14 +408,49 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
         let result: any;
 
         switch (fnName) {
+          case "semantic_search": {
+            // Use our deployed /search flow internally
+            try {
+              const emb: any = await env.AI.run("@cf/baai/bge-m3", { text: [fnArgs.query] });
+              const vec = emb?.data?.[0];
+              if (!vec) { result = { error: "embedding failed" }; break; }
+              const sbHeaders = { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}`, "Content-Type": "application/json" };
+              const kind = fnArgs.kind ?? "both";
+              const out: any = { events: [], places: [] };
+              if (kind === "events" || kind === "both") {
+                const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_events`, {
+                  method: "POST", headers: sbHeaders,
+                  body: JSON.stringify({ query_embedding: vec, match_count: 8, match_threshold: 0.3, filter_country: fnArgs.country ?? null }),
+                });
+                out.events = await r.json();
+                (out.events || []).forEach((e: any) => e.id && collectedEventIds.push(e.id));
+              }
+              if (kind === "places" || kind === "both") {
+                const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_places`, {
+                  method: "POST", headers: sbHeaders,
+                  body: JSON.stringify({ query_embedding: vec, match_count: 8, match_threshold: 0.3, filter_country: fnArgs.country ?? null }),
+                });
+                out.places = await r.json();
+                (out.places || []).forEach((p: any) => p.id && collectedPlaceIds.push(p.id));
+              }
+              result = out;
+            } catch (e: any) { result = { error: String(e.message || e) }; }
+            break;
+          }
           case "search_events":
             result = await searchEvents(supabase, fnArgs);
+            if (result.results) {
+              result.results.forEach((e: any) => e.id && collectedEventIds.push(e.id));
+            }
             break;
           case "search_routes":
             result = await searchRoutes(supabase, fnArgs);
             break;
           case "search_places":
             result = await searchPlaces(supabase, fnArgs);
+            if (result.results) {
+              result.results.forEach((p: any) => p.id && collectedPlaceIds.push(p.id));
+            }
             break;
           default:
             result = { error: `Ukendt funktion: ${fnName}` };
@@ -129,13 +465,28 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
       }
 
       // Second AI call — now with data from Supabase
-      const finalResponse = await env.AI.run("@cf/moonshotai/kimi-k2.5", {
+      const finalResponse = await env.AI.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
         messages,
       });
+
+      // Collect tag slugs from tool arguments (for live filter update on frontend)
+      const collectedTagSlugs: string[] = [];
+      for (const toolCall of aiResponse.tool_calls) {
+        const args = typeof toolCall.function.arguments === "string"
+          ? JSON.parse(toolCall.function.arguments)
+          : toolCall.function.arguments;
+        if (args.category) collectedTagSlugs.push(args.category);
+        if (args.tags) {
+          args.tags.split(",").map((t: string) => t.trim()).forEach((t: string) => collectedTagSlugs.push(t));
+        }
+      }
 
       return jsonResponse({
         reply: finalResponse.response || finalResponse.content || "",
         tool_calls_made: aiResponse.tool_calls.map((tc: any) => tc.function.name),
+        place_ids: collectedPlaceIds,
+        event_ids: collectedEventIds,
+        suggested_tag_slugs: [...new Set(collectedTagSlugs)],
       });
     }
 
@@ -143,6 +494,9 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
     return jsonResponse({
       reply: aiResponse.response || aiResponse.content || "",
       tool_calls_made: [],
+      place_ids: [],
+      event_ids: [],
+      suggested_tag_slugs: [],
     });
   } catch (err: any) {
     console.error("Chat error:", err);

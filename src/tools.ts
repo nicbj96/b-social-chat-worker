@@ -5,6 +5,33 @@ export const TOOLS = [
   {
     type: "function" as const,
     function: {
+      name: "semantic_search",
+      description:
+        "Semantisk AI-søgning på tværs af events og steder. Brug DENNE FØRST når brugeren beskriver noget i naturligt sprog — fx 'hyggeligt sted til date', 'noget stille i weekenden', 'find live jazz i natur', 'romantisk aften'. Returnerer de mest semantisk relevante events og steder baseret på meningen, ikke kun keywords.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Brugerens beskrivelse i naturligt sprog. Skriv det som brugeren sagde det.",
+          },
+          kind: {
+            type: "string",
+            enum: ["events", "places", "both"],
+            description: "Events, steder, eller begge dele. Default: both",
+          },
+          country: {
+            type: "string",
+            description: "Land-filter, fx 'DK', 'SE', 'NO' — kun hvis brugeren nævner et land",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
       name: "search_events",
       description:
         "Søg efter events og aktiviteter i B Social. Brug denne funktion når brugeren vil finde events, koncerter, løb, festivaler eller andre arrangementer.",
@@ -92,6 +119,11 @@ export const TOOLS = [
 ];
 
 export type ToolCallArgs = {
+  semantic_search: {
+    query: string;
+    kind?: "events" | "places" | "both";
+    country?: string;
+  };
   search_events: {
     category?: string;
     tags?: string;

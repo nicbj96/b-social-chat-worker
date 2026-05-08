@@ -13,7 +13,7 @@ export async function searchEvents(
 ) {
   let query = supabase
     .from("events")
-    .select("title, description, location, date, category, price, interest_tags, suitable_for_modes, indoor_outdoor")
+    .select("id, title, description, location, date, category, price, interest_tags, suitable_for_modes, indoor_outdoor")
     .gte("date", new Date().toISOString()) // only future events
     .order("date", { ascending: true })
     .limit(8);
@@ -44,6 +44,7 @@ export async function searchEvents(
 
   return {
     results: (data || []).map((e: any) => ({
+      id: e.id,
       title: e.title,
       description: e.description,
       location: e.location,
@@ -108,7 +109,7 @@ export async function searchPlaces(
 ) {
   let query = supabase
     .from("places")
-    .select("name, description, city, region, main_categories, tags, smart_tags, rating_avg, metadata")
+    .select("id, name, description, city, region, main_categories, tags, smart_tags, rating_avg, metadata")
     .order("rating_avg", { ascending: false })
     .limit(8);
 
@@ -134,6 +135,7 @@ export async function searchPlaces(
 
   return {
     results: (data || []).map((p: any) => ({
+      id: p.id,
       name: p.name,
       description: p.description,
       city: p.city,
