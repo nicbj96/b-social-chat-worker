@@ -141,11 +141,17 @@ export const TOOLS = [
     function: {
       name: "save_user_prefs",
       description:
-        "Du SKAL kalde dette tool når brugeren oplyser fakta om sig selv (by, gruppe-mode, energi-niveau, erfarings-mode). Eksempler: 'jeg bor i Aalborg' → city='Aalborg'. 'jeg er typisk solo' → group_mode='solo'. 'jeg foretrækker rolig energi' → energy_level='lav'. SIG ALDRIG 'jeg har noteret' uden at have kaldt dette tool først.",
+        "Du SKAL kalde dette tool når brugeren oplyser fakta om sig selv — by, gruppe-mode, energi-niveau eller erfarings-mode. " +
+        "Genkend ALLE disse danske formuleringer for by og pak værdien ind i city: " +
+        "'jeg bor i [by]', 'jeg bor [by]', 'min by er [by]', 'min by [by]', 'jeg er fra [by]', 'jeg kommer fra [by]', " +
+        "'jeg holder til i [by]', 'jeg er bosat i [by]', 'jeg er i [by]', '[by] er min by', 'jeg bor tæt på [by]'. " +
+        "Eksempler: 'jeg bor i Aalborg' → {city:'Aalborg'}. 'min by er København' → {city:'København'}. 'jeg er fra Aarhus' → {city:'Aarhus'}. " +
+        "'jeg er typisk solo' → {group_mode:'solo'}. 'jeg foretrækker rolig energi' → {energy_level:'lav'}. " +
+        "Capitaliser altid bynavnet (Aalborg, ikke aalborg). SIG ALDRIG 'jeg har noteret' uden at have kaldt dette tool først.",
       parameters: {
         type: "object",
         properties: {
-          city: { type: "string", description: "By, fx 'Aalborg'" },
+          city: { type: "string", description: "Bynavn (capitaliseret), fx 'Aalborg', 'København', 'Aarhus'. UDDRAG fra alle danske 'jeg bor i', 'min by er', 'jeg er fra' formuleringer." },
           group_mode: {
             type: "string",
             enum: ["solo", "duo", "gruppe"],

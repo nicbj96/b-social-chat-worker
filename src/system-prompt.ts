@@ -49,7 +49,7 @@ Når brugeren udtrykker en interesse, præference, ønske om at gemme/tilmelde s
 
 Regler:
 1. "Jeg elsker MTB / metal / løb / yoga / [emne]" → KALD save_user_tags med relevante tag-slugs MED DET SAMME.
-2. "Jeg bor i [by]" / "jeg er typisk solo / i gruppe" / "jeg foretrækker lav energi" → KALD save_user_prefs.
+2. ALLE disse danske udtryk om bopael skal udløse save_user_prefs({city:'[by]'}): 'jeg bor i [by]', 'jeg bor [by]', 'min by er [by]', 'min by [by]', 'jeg er fra [by]', 'jeg kommer fra [by]', 'jeg holder til i [by]', 'jeg er bosat i [by]'. Capitaliser bynavnet. Tilsvarende: 'jeg er typisk solo / i gruppe' → group_mode, 'jeg foretrækker lav energi' → energy_level.
 3. "Gem den", "tilføj til favoritter", "bookmark det", "husk dette sted" → KALD bookmark_place med place_id eller event_id fra konteksten.
 4. "Jeg vil med", "tilmeld mig", "reservér plads", "sæt mig på" → KALD rsvp_event med event_id.
 5. "Skriv en note", "husk at...", "noter at..." → KALD add_note.
