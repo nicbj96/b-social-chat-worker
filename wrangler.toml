@@ -1,6 +1,8 @@
 name = "b-social-chat"
 main = "src/index.ts"
 compatibility_date = "2024-09-23"
+# nodejs_compat is required by @sentry/cloudflare (uses AsyncLocalStorage).
+compatibility_flags = ["nodejs_compat"]
 
 [ai]
 binding = "AI"
@@ -14,6 +16,7 @@ SUPABASE_URL = "https://rbengtfrthqdfbcdcugp.supabase.co"
 #   VAPID_PRIVATE_KEY — Web Push private key (d parameter)
 #   VAPID_SUBJECT     — mailto:... contact for push services
 #   PUSH_ADMIN_KEY    — admin auth for /push/broadcast (optional)
+#   SENTRY_DSN        — Sentry DSN for error tracking (optional)
 
 # Weekly digest: every Friday 17:00 UTC (18:00 CET / 19:00 CEST)
 [triggers]

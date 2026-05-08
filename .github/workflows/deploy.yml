@@ -37,7 +37,9 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy
+          # Pin wrangler version — same policy as the pages workflow.
+          wranglerVersion: '3.114.17'
+          command: deploy --var SENTRY_RELEASE:${{ github.sha }}
 
       - name: Smoke test
         run: |

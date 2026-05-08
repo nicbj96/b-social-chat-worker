@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/cloudflare";
 import { SYSTEM_PROMPT } from "./system-prompt";
 import { TOOLS } from "./tools";
 import {
@@ -17,6 +18,8 @@ interface Env {
   VAPID_PRIVATE_KEY: string;
   VAPID_SUBJECT: string;
   PUSH_ADMIN_KEY?: string;
+  SENTRY_DSN?: string;
+  SENTRY_RELEASE?: string;
 }
 
 // Chat message type
@@ -34,7 +37,8 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Admin-Key",
 };
 
-export default {
+// Bare worker — Sentry wraps this below.
+const worker = {
   async fetch(request: Request, env: Env): Promise<Response> {
     // Handle CORS preflight
     if (request.method === "OPTIONS") {
@@ -78,6 +82,19 @@ export default {
     ctx.waitUntil(runWeeklyDigest(env));
   },
 };
+
+// Wrap with Sentry — auto-captures unhandled errors in fetch + scheduled.
+// No-ops cleanly when SENTRY_DSN is unset (e.g. local dev).
+export default Sentry.withSentry(
+  (env: Env) => ({
+    dsn: env.SENTRY_DSN,
+    environment: "production",
+    release: env.SENTRY_RELEASE ?? "dev",
+    tracesSampleRate: 0.1,
+    sendDefaultPii: false,
+  }),
+  worker,
+);
 
 // ── Push send helpers ─────────────────────────────────────────────────
 
