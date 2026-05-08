@@ -667,8 +667,13 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
           ? JSON.parse(toolCall.function.arguments)
           : toolCall.function.arguments;
         if (args.category) collectedTagSlugs.push(args.category);
+        // args.tags can be string (search_events / search_places) or string[]
+        // (save_user_tags). Handle both shapes.
         if (args.tags) {
-          args.tags.split(",").map((t: string) => t.trim()).forEach((t: string) => collectedTagSlugs.push(t));
+          const list: string[] = Array.isArray(args.tags)
+            ? args.tags
+            : String(args.tags).split(",").map((t: string) => t.trim());
+          for (const t of list) if (t) collectedTagSlugs.push(t);
         }
       }
 
