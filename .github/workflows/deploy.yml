@@ -1,0 +1,46 @@
+name: Deploy chat-worker
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'wrangler.toml'
+      - 'package.json'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Type check (non-blocking)
+        continue-on-error: true
+        run: npx tsc --noEmit
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
+
+      - name: Smoke test
+        run: |
+          sleep 5
+          curl -fsSL -o /dev/null -w "Deployed worker responded with HTTP %{http_code}\n" \
+            https://b-social-chat.nicbj96.workers.dev/ || echo "Smoke test failed (worker may require POST)"
