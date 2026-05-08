@@ -274,6 +274,22 @@ async function handleSemanticSearch(request: Request, env: Env): Promise<Respons
 
 async function handleChat(request: Request, env: Env): Promise<Response> {
   try {
+    // Extract user JWT from Authorization header
+    const authHeader = request.headers.get("Authorization");
+    const userJwt = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    let userId: string | null = null;
+    if (userJwt) {
+      try {
+        const userRes = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+          headers: { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${userJwt}` },
+        });
+        if (userRes.ok) {
+          const u = await userRes.json() as any;
+          userId = u?.id || null;
+        }
+      } catch {}
+    }
+
     const body = (await request.json()) as {
       messages?: { role: string; content: string }[];
       message?: string;
@@ -469,6 +485,164 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
               result.results.forEach((p: any) => p.id && collectedPlaceIds.push(p.id));
             }
             break;
+
+          // ── Write tools (JWT-baseret, RLS-sikrede) ──────────────────────
+          case "save_user_tags": {
+            if (!userId || !userJwt) { result = { error: "Du skal være logget ind for at gemme dette" }; break; }
+            try {
+              const userHeaders = {
+                apikey: env.SUPABASE_KEY,
+                Authorization: `Bearer ${userJwt}`,
+                "Content-Type": "application/json",
+                Prefer: "return=representation",
+              };
+              // GET current interests
+              const getRes = await fetch(
+                `${env.SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=interests`,
+                { headers: { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${userJwt}` } }
+              );
+              const profiles: any[] = await getRes.json();
+              const existing: string[] = profiles[0]?.interests || [];
+              const newTags: string[] = fnArgs.tags || [];
+              const merged = [...new Set([...existing, ...newTags])];
+              // PATCH profiles.interests
+              await fetch(`${env.SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}`, {
+                method: "PATCH",
+                headers: { ...userHeaders, Prefer: "return=minimal" },
+                body: JSON.stringify({ interests: merged }),
+              });
+              // For each new tag: lookup tag_id in tags_normalized, then upsert user_tags_normalized
+              const addedTags = newTags.filter(t => !existing.includes(t));
+              const tagResults: { tag: string; saved: boolean }[] = [];
+              for (const tag of addedTags) {
+                try {
+                  const tagLookup = await fetch(
+                    `${env.SUPABASE_URL}/rest/v1/tags_normalized?slug=eq.${encodeURIComponent(tag)}&select=id&limit=1`,
+                    { headers: { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}` } }
+                  );
+                  const tagRows: any[] = await tagLookup.json();
+                  if (tagRows[0]?.id) {
+                    await fetch(`${env.SUPABASE_URL}/rest/v1/user_tags_normalized?on_conflict=user_id,tag_id`, {
+                      method: "POST",
+                      headers: { ...userHeaders, Prefer: "resolution=merge-duplicates,return=minimal" },
+                      body: JSON.stringify({ user_id: userId, tag_id: tagRows[0].id, weight: 1.0 }),
+                    });
+                    tagResults.push({ tag, saved: true });
+                  } else {
+                    tagResults.push({ tag, saved: false });
+                  }
+                } catch { tagResults.push({ tag, saved: false }); }
+              }
+              result = { ok: true, interests: merged, tag_results: tagResults };
+            } catch (e: any) { result = { error: "Kunne ikke gemme tags", details: e.message }; }
+            break;
+          }
+
+          case "save_user_prefs": {
+            if (!userId || !userJwt) { result = { error: "Du skal være logget ind for at gemme dette" }; break; }
+            try {
+              const patch: Record<string, string> = {};
+              if (fnArgs.city) patch.city = fnArgs.city;
+              if (fnArgs.group_mode) patch.group_mode = fnArgs.group_mode;
+              if (fnArgs.energy_level) patch.energy_level = fnArgs.energy_level;
+              if (fnArgs.experience_mode) patch.experience_mode = fnArgs.experience_mode;
+              if (Object.keys(patch).length === 0) { result = { ok: true, message: "Ingen ændringer" }; break; }
+              await fetch(`${env.SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}`, {
+                method: "PATCH",
+                headers: {
+                  apikey: env.SUPABASE_KEY,
+                  Authorization: `Bearer ${userJwt}`,
+                  "Content-Type": "application/json",
+                  Prefer: "return=minimal",
+                },
+                body: JSON.stringify(patch),
+              });
+              result = { ok: true, updated: patch };
+            } catch (e: any) { result = { error: "Kunne ikke gemme præferencer", details: e.message }; }
+            break;
+          }
+
+          case "bookmark_place": {
+            if (!userId || !userJwt) { result = { error: "Du skal være logget ind for at gemme dette" }; break; }
+            try {
+              const record: Record<string, string> = { user_id: userId };
+              if (fnArgs.place_id) record.place_id = fnArgs.place_id;
+              if (fnArgs.event_id) record.event_id = fnArgs.event_id;
+              if (!fnArgs.place_id && !fnArgs.event_id) { result = { error: "Angiv place_id eller event_id" }; break; }
+              const r = await fetch(`${env.SUPABASE_URL}/rest/v1/saved_places`, {
+                method: "POST",
+                headers: {
+                  apikey: env.SUPABASE_KEY,
+                  Authorization: `Bearer ${userJwt}`,
+                  "Content-Type": "application/json",
+                  Prefer: "return=minimal",
+                },
+                body: JSON.stringify(record),
+              });
+              if (!r.ok && r.status !== 409) {
+                const errText = await r.text();
+                result = { error: "Kunne ikke gemme bogmærke", details: errText };
+              } else {
+                result = { ok: true, bookmarked: record };
+              }
+            } catch (e: any) { result = { error: "Kunne ikke gemme bogmærke", details: e.message }; }
+            break;
+          }
+
+          case "rsvp_event": {
+            if (!userId || !userJwt) { result = { error: "Du skal være logget ind for at gemme dette" }; break; }
+            try {
+              const status = fnArgs.status || "going";
+              const r = await fetch(`${env.SUPABASE_URL}/rest/v1/event_rsvps?on_conflict=user_id,event_id`, {
+                method: "POST",
+                headers: {
+                  apikey: env.SUPABASE_KEY,
+                  Authorization: `Bearer ${userJwt}`,
+                  "Content-Type": "application/json",
+                  Prefer: "resolution=merge-duplicates,return=minimal",
+                },
+                body: JSON.stringify({ user_id: userId, event_id: fnArgs.event_id, status }),
+              });
+              if (!r.ok) {
+                const errText = await r.text();
+                result = { error: "Kunne ikke tilmelde til event", details: errText };
+              } else {
+                result = { ok: true, event_id: fnArgs.event_id, status };
+              }
+            } catch (e: any) { result = { error: "Kunne ikke tilmelde til event", details: e.message }; }
+            break;
+          }
+
+          case "add_note": {
+            if (!userId || !userJwt) { result = { error: "Du skal være logget ind for at gemme dette" }; break; }
+            try {
+              const notePayload: Record<string, any> = {
+                user_id: userId,
+                content: fnArgs.content,
+              };
+              if (fnArgs.title) notePayload.title = fnArgs.title;
+              if (fnArgs.tags && fnArgs.tags.length > 0) notePayload.tags = fnArgs.tags;
+              const r = await fetch(`${env.SUPABASE_URL}/rest/v1/notes`, {
+                method: "POST",
+                headers: {
+                  apikey: env.SUPABASE_KEY,
+                  Authorization: `Bearer ${userJwt}`,
+                  "Content-Type": "application/json",
+                  Prefer: "return=representation",
+                },
+                body: JSON.stringify(notePayload),
+              });
+              if (!r.ok) {
+                const errText = await r.text();
+                result = { error: "Kunne ikke oprette note", details: errText };
+              } else {
+                const rows: any[] = await r.json();
+                result = { ok: true, note_id: rows[0]?.id, title: rows[0]?.title };
+              }
+            } catch (e: any) { result = { error: "Kunne ikke oprette note", details: e.message }; }
+            break;
+          }
+
           default:
             result = { error: `Ukendt funktion: ${fnName}` };
         }

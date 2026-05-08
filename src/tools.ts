@@ -116,6 +116,110 @@ export const TOOLS = [
       },
     },
   },
+  // ── Write tools (kræver JWT) ──────────────────────────────────────────
+  {
+    type: "function" as const,
+    function: {
+      name: "save_user_tags",
+      description:
+        "Gem brugerens interesse-tags. Brug når brugeren udtrykker interesse for noget ('jeg elsker MTB', 'jeg er til metal-koncerter'). Tilføjer til eksisterende tags, overskriver IKKE.",
+      parameters: {
+        type: "object",
+        properties: {
+          tags: {
+            type: "array",
+            items: { type: "string" },
+            description: "Tag-slugs at tilføje, fx ['mtb','metal']",
+          },
+        },
+        required: ["tags"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "save_user_prefs",
+      description:
+        "Gem brugerens preferences (by, group_mode, energy_level). Brug når brugeren oplyser fakta om sig selv ('jeg bor i Aalborg', 'jeg er typisk solo').",
+      parameters: {
+        type: "object",
+        properties: {
+          city: { type: "string", description: "By, fx 'Aalborg'" },
+          group_mode: {
+            type: "string",
+            enum: ["solo", "duo", "gruppe"],
+            description: "Foretrukket gruppe-størrelse",
+          },
+          energy_level: {
+            type: "string",
+            enum: ["lav", "medium", "høj"],
+            description: "Foretrukket energi-niveau",
+          },
+          experience_mode: {
+            type: "string",
+            description: "Erfarings-mode",
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "bookmark_place",
+      description:
+        "Gem et sted (place) eller event som bogmærke. Brug når brugeren siger 'gem den', 'tilføj til favoritter'.",
+      parameters: {
+        type: "object",
+        properties: {
+          place_id: { type: "string", description: "UUID på sted at gemme" },
+          event_id: { type: "string", description: "UUID på event at gemme" },
+        },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "rsvp_event",
+      description:
+        "Tilmeld brugeren til et event. Brug når brugeren siger 'jeg vil med', 'tilmeld mig', 'reservér plads'.",
+      parameters: {
+        type: "object",
+        properties: {
+          event_id: { type: "string", description: "Event ID (text)" },
+          status: {
+            type: "string",
+            enum: ["going", "interested", "not_going"],
+            description: "RSVP-status, default 'going'",
+          },
+        },
+        required: ["event_id"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "add_note",
+      description:
+        "Opret en note for brugeren. Brug når brugeren siger 'skriv en note', 'husk at...', 'noter at...'.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Note-titel" },
+          content: { type: "string", description: "Note-indhold" },
+          tags: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optionelle tags",
+          },
+        },
+        required: ["content"],
+      },
+    },
+  },
 ];
 
 export type ToolCallArgs = {
@@ -139,5 +243,27 @@ export type ToolCallArgs = {
     category?: string;
     tags?: string;
     city?: string;
+  };
+  save_user_tags: {
+    tags: string[];
+  };
+  save_user_prefs: {
+    city?: string;
+    group_mode?: "solo" | "duo" | "gruppe";
+    energy_level?: "lav" | "medium" | "høj";
+    experience_mode?: string;
+  };
+  bookmark_place: {
+    place_id?: string;
+    event_id?: string;
+  };
+  rsvp_event: {
+    event_id: string;
+    status?: "going" | "interested" | "not_going";
+  };
+  add_note: {
+    title?: string;
+    content: string;
+    tags?: string[];
   };
 };
