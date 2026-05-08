@@ -122,7 +122,7 @@ export const TOOLS = [
     function: {
       name: "save_user_tags",
       description:
-        "Gem brugerens interesse-tags. Brug når brugeren udtrykker interesse for noget ('jeg elsker MTB', 'jeg er til metal-koncerter'). Tilføjer til eksisterende tags, overskriver IKKE.",
+        "Du SKAL kalde dette tool ENHVER gang brugeren udtrykker en interesse, et ønske eller en hobby ('jeg elsker MTB', 'jeg er til metal-koncerter', 'yoga er min ting', 'jeg går meget op i løb'). Konvertér interessen til tag-slugs (lower-case, ingen mellemrum, fx 'mtb', 'metal', 'yoga', 'lob'). Tilføjer til eksisterende tags, overskriver IKKE. SIG ALDRIG 'jeg har gemt' uden at have kaldt dette tool først.",
       parameters: {
         type: "object",
         properties: {
@@ -141,7 +141,7 @@ export const TOOLS = [
     function: {
       name: "save_user_prefs",
       description:
-        "Gem brugerens preferences (by, group_mode, energy_level). Brug når brugeren oplyser fakta om sig selv ('jeg bor i Aalborg', 'jeg er typisk solo').",
+        "Du SKAL kalde dette tool når brugeren oplyser fakta om sig selv (by, gruppe-mode, energi-niveau, erfarings-mode). Eksempler: 'jeg bor i Aalborg' → city='Aalborg'. 'jeg er typisk solo' → group_mode='solo'. 'jeg foretrækker rolig energi' → energy_level='lav'. SIG ALDRIG 'jeg har noteret' uden at have kaldt dette tool først.",
       parameters: {
         type: "object",
         properties: {
@@ -169,7 +169,7 @@ export const TOOLS = [
     function: {
       name: "bookmark_place",
       description:
-        "Gem et sted (place) eller event som bogmærke. Brug når brugeren siger 'gem den', 'tilføj til favoritter'.",
+        "Du SKAL kalde dette tool når brugeren siger 'gem den', 'bookmark det', 'tilføj til favoritter', 'husk dette sted'. Brug place_id for steder eller event_id for events fra konteksten. SIG ALDRIG 'jeg har gemt' uden at have kaldt dette tool først.",
       parameters: {
         type: "object",
         properties: {
@@ -184,7 +184,7 @@ export const TOOLS = [
     function: {
       name: "rsvp_event",
       description:
-        "Tilmeld brugeren til et event. Brug når brugeren siger 'jeg vil med', 'tilmeld mig', 'reservér plads'.",
+        "Du SKAL kalde dette tool når brugeren siger 'jeg vil med', 'tilmeld mig', 'reservér plads', 'sæt mig på listen', 'jeg er på'. Default status='going'. SIG ALDRIG 'du er tilmeldt' uden at have kaldt dette tool først.",
       parameters: {
         type: "object",
         properties: {
@@ -204,7 +204,7 @@ export const TOOLS = [
     function: {
       name: "add_note",
       description:
-        "Opret en note for brugeren. Brug når brugeren siger 'skriv en note', 'husk at...', 'noter at...'.",
+        "Du SKAL kalde dette tool når brugeren siger 'skriv en note', 'husk at...', 'noter at...', 'lav et memo'. SIG ALDRIG 'jeg har noteret' uden at have kaldt dette tool først.",
       parameters: {
         type: "object",
         properties: {
