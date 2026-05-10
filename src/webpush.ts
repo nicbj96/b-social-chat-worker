@@ -56,13 +56,13 @@ async function encryptPayload(payload: Uint8Array, clientP256dh: string, clientA
   const authSecret = b64UrlToBytes(clientAuth);
 
   // Generate ephemeral server keypair
-  const serverKey = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
-  const serverPubRaw = new Uint8Array(await crypto.subtle.exportKey("raw", serverKey.publicKey)); // 65B
+  const serverKey = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]) as CryptoKeyPair;
+  const serverPubRaw = new Uint8Array(await crypto.subtle.exportKey("raw", serverKey.publicKey) as ArrayBuffer); // 65B
   const clientPub = await crypto.subtle.importKey("raw", clientPubBytes, { name: "ECDH", namedCurve: "P-256" }, false, []);
 
   // ECDH shared secret
   const shared = new Uint8Array(
-    await crypto.subtle.deriveBits({ name: "ECDH", public: clientPub }, serverKey.privateKey, 256)
+    await crypto.subtle.deriveBits({ name: "ECDH", public: clientPub } as any, serverKey.privateKey, 256)
   );
 
   // Key material: HKDF(auth_secret, shared, "WebPush: info\0" || client_pub || server_pub) → 32 bytes

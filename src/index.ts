@@ -20,6 +20,10 @@ interface Env {
   PUSH_ADMIN_KEY?: string;
   SENTRY_DSN?: string;
   SENTRY_RELEASE?: string;
+  COMMAND_CENTER_INGEST_URL?: string;
+  COMMAND_CENTER_INGEST_TOKEN?: string;
+  COMMAND_CENTER_ACCESS_CLIENT_ID?: string;
+  COMMAND_CENTER_ACCESS_CLIENT_SECRET?: string;
 }
 
 // Chat message type
@@ -39,7 +43,7 @@ const CORS_HEADERS = {
 
 // Bare worker — Sentry wraps this below.
 const worker = {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     // Handle CORS preflight
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: CORS_HEADERS });
@@ -49,7 +53,7 @@ const worker = {
     const url = new URL(request.url);
 
     if (url.pathname === "/chat" && request.method === "POST") {
-      return handleChat(request, env);
+      return handleChat(request, env, ctx);
     }
 
     // Embed one or many texts — returns 1024-dim bge-m3 vectors
@@ -78,7 +82,7 @@ const worker = {
   },
 
   // Scheduled weekly digest (configured in wrangler.toml)
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(runWeeklyDigest(env));
   },
 };
@@ -272,7 +276,45 @@ async function handleSemanticSearch(request: Request, env: Env): Promise<Respons
   }
 }
 
-async function handleChat(request: Request, env: Env): Promise<Response> {
+function latestUserMessage(messages: ChatMessage[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === "user" && messages[index].content) return messages[index].content;
+  }
+  return "";
+}
+
+async function notifyCommandCenter(env: Env, message: string, context: unknown) {
+  if (!env.COMMAND_CENTER_INGEST_URL || !env.COMMAND_CENTER_INGEST_TOKEN || !message) return;
+
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "x-b-social-ingest-token": env.COMMAND_CENTER_INGEST_TOKEN,
+  };
+  if (env.COMMAND_CENTER_ACCESS_CLIENT_ID && env.COMMAND_CENTER_ACCESS_CLIENT_SECRET) {
+    headers["CF-Access-Client-Id"] = env.COMMAND_CENTER_ACCESS_CLIENT_ID;
+    headers["CF-Access-Client-Secret"] = env.COMMAND_CENTER_ACCESS_CLIENT_SECRET;
+  }
+
+  await fetch(env.COMMAND_CENTER_INGEST_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      source: "web_chat",
+      channel: "b-social.net chat",
+      fromName: "Website visitor",
+      subject: "Website chat",
+      body: message,
+      sentiment: "warm",
+      metadata: {
+        context,
+        worker: "b-social-chat",
+        received_at: new Date().toISOString(),
+      },
+    }),
+  });
+}
+
+async function handleChat(request: Request, env: Env, executionCtx: ExecutionContext): Promise<Response> {
   try {
     // Extract user JWT from Authorization header
     const authHeader = request.headers.get("Authorization");
@@ -320,6 +362,8 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
     } else {
       return jsonResponse({ error: "Mangler 'message' eller 'messages' felt" }, 400);
     }
+
+    executionCtx.waitUntil(notifyCommandCenter(env, latestUserMessage(userMessages), body.context || {}));
 
     // Build page-aware context injection for the system prompt
     const ctx = body.context || {};
