@@ -8,6 +8,7 @@ import {
   searchPlaces,
 } from "./supabase-queries";
 import { sendWebPush, type PushMessage } from "./webpush";
+import { isSafeEntityId, isValidUuid, clampString } from "./validate";
 
 // Env bindings
 interface Env {
@@ -122,10 +123,45 @@ function vapidFromEnv(env: Env) {
   return { publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY, subject: env.VAPID_SUBJECT };
 }
 
+// Resolve the Supabase user id for a Bearer JWT, or null if invalid/absent.
+// Same verification pattern handleChat uses (GET /auth/v1/user with the JWT).
+async function resolveUserIdFromJwt(env: Env, request: Request): Promise<string | null> {
+  const authHeader = request.headers.get("Authorization");
+  const userJwt = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (!userJwt) return null;
+  try {
+    const userRes = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+      headers: { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${userJwt}` },
+    });
+    if (!userRes.ok) return null;
+    const u = (await userRes.json()) as any;
+    return u?.id || null;
+  } catch {
+    return null;
+  }
+}
+
 async function handlePushSend(request: Request, env: Env): Promise<Response> {
   try {
     const body = (await request.json()) as { user_id: string; message: PushMessage };
     if (!body.user_id || !body.message?.title) return jsonResponse({ error: "user_id + message.title required" }, 400);
+
+    // S1 (HIGH) — /push/send was previously UNAUTHENTICATED: anyone could push
+    // arbitrary notifications to any user's devices (phishing/spam). Require
+    // EITHER a valid admin key OR a user JWT whose resolved id == body.user_id
+    // (a user may only push to their OWN devices).
+    // OWNER-VERIFY: confirm the real /push/send caller sends one of these
+    // credentials (X-Admin-Key OR a per-user Bearer JWT) BEFORE merging/
+    // deploying — the legitimate caller is currently unknown. If the caller
+    // relies on the old unauthenticated behavior this WILL break it (by design).
+    const adminKey = request.headers.get("X-Admin-Key");
+    const isAdmin = !!env.PUSH_ADMIN_KEY && adminKey === env.PUSH_ADMIN_KEY;
+    if (!isAdmin) {
+      const callerUserId = await resolveUserIdFromJwt(env, request);
+      if (!callerUserId || callerUserId !== body.user_id) {
+        return jsonResponse({ error: "unauthorized" }, 401);
+      }
+    }
 
     const subs = await fetchSubsForUser(env, body.user_id);
     if (subs.length === 0) return jsonResponse({ sent: 0, reason: "no_subscriptions" });
@@ -155,7 +191,14 @@ async function handlePushBroadcast(request: Request, env: Env): Promise<Response
     if (!body.message?.title) return jsonResponse({ error: "message.title required" }, 400);
 
     let url = `${env.SUPABASE_URL}/rest/v1/push_subscriptions?enabled=eq.true&select=endpoint,p256dh,auth`;
-    if (body.where?.user_ids?.length) url += `&user_id=in.(${body.where.user_ids.map(i => `"${i}"`).join(",")})`;
+    if (body.where?.user_ids?.length) {
+      // S3 — validate each user_id is a UUID before building the PostgREST
+      // `in.()` filter. Quoting alone did not prevent a crafted id from
+      // injecting extra filter params/operators. Drop invalid ids.
+      const safeIds = body.where.user_ids.filter(isValidUuid);
+      if (safeIds.length === 0) return jsonResponse({ error: "no valid user_ids" }, 400);
+      url += `&user_id=in.(${safeIds.map(i => `"${encodeURIComponent(i)}"`).join(",")})`;
+    }
 
     const r = await fetch(url, { headers: { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}` } });
     const subs = (await r.json()) as Array<{ endpoint: string; p256dh: string; auth: string }>;
@@ -314,8 +357,19 @@ async function notifyCommandCenter(env: Env, message: string, context: unknown) 
   });
 }
 
+// S4 — conservative input caps (cost + prompt-injection blowup guard).
+const MAX_MESSAGES = 30;        // keep only the last N turns
+const MAX_MESSAGE_CHARS = 4000; // per-message content cap
+const MAX_BODY_BYTES = 256 * 1024; // reject trivially-huge bodies early (256KB)
+
 async function handleChat(request: Request, env: Env, executionCtx: ExecutionContext): Promise<Response> {
   try {
+    // S4 — reject obviously-oversized bodies before parsing/work.
+    const declaredLen = Number(request.headers.get("content-length") || 0);
+    if (declaredLen > MAX_BODY_BYTES) {
+      return jsonResponse({ error: "payload for stor" }, 400);
+    }
+
     // Extract user JWT from Authorization header
     const authHeader = request.headers.get("Authorization");
     const userJwt = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
@@ -353,12 +407,15 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
     let userMessages: ChatMessage[];
 
     if (body.messages && Array.isArray(body.messages)) {
-      userMessages = body.messages.map((m) => ({
-        role: m.role as ChatMessage["role"],
-        content: m.content,
-      }));
+      // S4 — cap to the last MAX_MESSAGES turns and clamp each content length.
+      userMessages = body.messages
+        .slice(-MAX_MESSAGES)
+        .map((m) => ({
+          role: m.role as ChatMessage["role"],
+          content: clampString(m.content, MAX_MESSAGE_CHARS),
+        }));
     } else if (body.message) {
-      userMessages = [{ role: "user", content: body.message }];
+      userMessages = [{ role: "user", content: clampString(body.message, MAX_MESSAGE_CHARS) }];
     } else {
       return jsonResponse({ error: "Mangler 'message' eller 'messages' felt" }, 400);
     }
@@ -376,39 +433,48 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       contextLines.push(`Brugerens nuværende side: ${pageLabels[ctx.pageType] || ctx.pageType}.`);
     }
     if (ctx.active_tags && ctx.active_tags.length > 0) {
-      contextLines.push(`Aktive filtre på siden: ${ctx.active_tags.join(", ")}.`);
+      // S4 — clamp the joined tag list before injecting into the system prompt.
+      contextLines.push(`Aktive filtre på siden: ${clampString(ctx.active_tags.join(", "), 300)}.`);
     }
     if (ctx.viewport) {
       contextLines.push(`Kortets centrum: lat ${ctx.viewport.lat.toFixed(4)}, lng ${ctx.viewport.lng.toFixed(4)}, zoom ${ctx.viewport.zoom}.`);
     }
     if (ctx.user_prefs) {
       const p = ctx.user_prefs;
-      if (p.city) contextLines.push(`Brugerens by: ${p.city}.`);
-      if (p.interest_slugs?.length) contextLines.push(`Brugerens interesser: ${p.interest_slugs.join(", ")}.`);
-      if (p.group_mode) contextLines.push(`Bruger foretrækker: ${p.group_mode}.`);
+      // S4 — clamp user-controlled preference strings before prompt injection.
+      if (p.city) contextLines.push(`Brugerens by: ${clampString(p.city, 80)}.`);
+      if (p.interest_slugs?.length) contextLines.push(`Brugerens interesser: ${clampString(p.interest_slugs.join(", "), 300)}.`);
+      if (p.group_mode) contextLines.push(`Bruger foretrækker: ${clampString(p.group_mode, 80)}.`);
     }
     // Phase 5: behavioral history — most recently viewed places/events
     if (ctx.recent_views && ctx.recent_views.length > 0) {
       const recLabels = ctx.recent_views
+        .slice(0, 10) // S4 — cap how many recent views we expand
         .map((v: { id: string; type: string; tags: string[] }) =>
-          `${v.type === "place" ? "Sted" : "Event"} (${v.tags.slice(0, 2).join(", ") || v.id.slice(0, 8)})`
+          `${v.type === "place" ? "Sted" : "Event"} (${clampString((Array.isArray(v.tags) ? v.tags.slice(0, 2).join(", ") : "") || String(v.id ?? "").slice(0, 8), 80)})`
         )
         .join("; ");
-      contextLines.push(`Senest besøgte: ${recLabels}.`);
+      // S4 — clamp the whole joined label string too.
+      contextLines.push(`Senest besøgte: ${clampString(recLabels, 400)}.`);
     }
     // Phase 5: session memory from previous conversation
     if (ctx.last_session) {
-      contextLines.push(`Forrige session: ${String(ctx.last_session).slice(0, 200)}`);
+      contextLines.push(`Forrige session: ${clampString(ctx.last_session, 200)}`);
     }
     // Step 5: entity context — fetch current event/place name from Supabase
-    if (ctx.entity_id && (ctx.entity_type === 'event' || ctx.entity_type === 'place')) {
+    // S2 — entity_id is user-controlled and was interpolated RAW into the
+    // PostgREST `?id=eq.<value>` URL, so a crafted value could append extra
+    // params/operators. Validate it's a plausible id (UUID or digits) and
+    // encodeURIComponent it; skip the (optional) lookup if invalid.
+    if (ctx.entity_id && isSafeEntityId(ctx.entity_id) && (ctx.entity_type === 'event' || ctx.entity_type === 'place')) {
+      const safeEntityId = encodeURIComponent(ctx.entity_id);
       try {
         const sbUrl = env.SUPABASE_URL;
         const sbKey = env.SUPABASE_KEY;
         const headers = { apikey: sbKey, Authorization: `Bearer ${sbKey}` };
         if (ctx.entity_type === 'event') {
           const r = await fetch(
-            `${sbUrl}/rest/v1/events?id=eq.${ctx.entity_id}&select=title,location,tags&limit=1`,
+            `${sbUrl}/rest/v1/events?id=eq.${safeEntityId}&select=title,location,tags&limit=1`,
             { headers }
           );
           const rows: any[] = await r.json();
@@ -419,7 +485,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
           }
         } else {
           const r = await fetch(
-            `${sbUrl}/rest/v1/places?id=eq.${ctx.entity_id}&select=name,city,main_categories&limit=1`,
+            `${sbUrl}/rest/v1/places?id=eq.${safeEntityId}&select=name,city,main_categories&limit=1`,
             { headers }
           );
           const rows: any[] = await r.json();
