@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isValidUuid, isSafeEntityId, clampString } from "./validate";
+import { isValidUuid, isSafeEntityId, clampString, clampNumber } from "./validate";
 
 const UUID = "123e4567-e89b-12d3-a456-426614174000";
 
@@ -84,5 +84,40 @@ describe("clampString", () => {
     expect(clampString(undefined as unknown, 10)).toBe("");
     expect(clampString({} as unknown, 10)).toBe("");
     expect(clampString(["a"] as unknown, 10)).toBe("");
+  });
+});
+
+describe("clampNumber", () => {
+  it("passes through in-range values unchanged", () => {
+    expect(clampNumber(10, 1, 50, 5)).toBe(10);
+    expect(clampNumber(0.3, 0, 1, 0.5)).toBe(0.3);
+  });
+
+  it("returns the boundary values when exactly at min/max", () => {
+    expect(clampNumber(1, 1, 50, 10)).toBe(1);
+    expect(clampNumber(50, 1, 50, 10)).toBe(50);
+    expect(clampNumber(0, 0, 1, 0.3)).toBe(0);
+    expect(clampNumber(1, 0, 1, 0.3)).toBe(1);
+  });
+
+  it("clamps below-min values up to min", () => {
+    expect(clampNumber(0, 1, 50, 10)).toBe(1);
+    expect(clampNumber(-5, 1, 50, 10)).toBe(1);
+    expect(clampNumber(-0.2, 0, 1, 0.3)).toBe(0);
+  });
+
+  it("clamps above-max values down to max", () => {
+    expect(clampNumber(9999, 1, 50, 10)).toBe(50);
+    expect(clampNumber(5, 0, 1, 0.3)).toBe(1);
+  });
+
+  it("falls back for NaN, Infinity, and non-numbers", () => {
+    expect(clampNumber(NaN, 1, 50, 10)).toBe(10);
+    expect(clampNumber(Infinity, 1, 50, 10)).toBe(10);
+    expect(clampNumber(-Infinity, 1, 50, 10)).toBe(10);
+    expect(clampNumber("20" as unknown, 1, 50, 10)).toBe(10);
+    expect(clampNumber(null as unknown, 1, 50, 10)).toBe(10);
+    expect(clampNumber(undefined as unknown, 1, 50, 10)).toBe(10);
+    expect(clampNumber({} as unknown, 1, 50, 10)).toBe(10);
   });
 });

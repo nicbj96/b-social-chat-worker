@@ -8,7 +8,7 @@ import {
   searchPlaces,
 } from "./supabase-queries";
 import { sendWebPush, type PushMessage } from "./webpush";
-import { isSafeEntityId, isValidUuid, clampString } from "./validate";
+import { isSafeEntityId, isValidUuid, clampString, clampNumber } from "./validate";
 
 // Env bindings
 interface Env {
@@ -104,11 +104,17 @@ export default Sentry.withSentry(
 // ── Push send helpers ─────────────────────────────────────────────────
 
 async function fetchSubsForUser(env: Env, userId: string) {
+  // C1 — encodeURIComponent the userId (defense-in-depth). The admin-supplied
+  // id is UUID-validated by the caller (handlePushSend); encoding here protects
+  // against any future caller that forgets to validate first.
   const r = await fetch(
-    `${env.SUPABASE_URL}/rest/v1/push_subscriptions?user_id=eq.${userId}&enabled=eq.true&select=endpoint,p256dh,auth`,
+    `${env.SUPABASE_URL}/rest/v1/push_subscriptions?user_id=eq.${encodeURIComponent(userId)}&enabled=eq.true&select=endpoint,p256dh,auth`,
     { headers: { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}` } }
   );
-  return (await r.json()) as Array<{ endpoint: string; p256dh: string; auth: string }>;
+  // C4 — Supabase may return an error object ({message,code}) instead of an
+  // array; coerce to [] so a Supabase error degrades to "no subscriptions".
+  const data = await r.json();
+  return (Array.isArray(data) ? data : []) as Array<{ endpoint: string; p256dh: string; auth: string }>;
 }
 
 async function disableSubscription(env: Env, endpoint: string) {
@@ -145,6 +151,12 @@ async function handlePushSend(request: Request, env: Env): Promise<Response> {
   try {
     const body = (await request.json()) as { user_id: string; message: PushMessage };
     if (!body.user_id || !body.message?.title) return jsonResponse({ error: "user_id + message.title required" }, 400);
+
+    // C1 — validate user_id is a UUID BEFORE any subscription fetch, on BOTH
+    // the admin and JWT paths. Previously the admin path passed body.user_id
+    // straight to fetchSubsForUser, which interpolated it raw into the
+    // PostgREST `user_id=eq.<value>` URL (the JWT path's id is already a UUID).
+    if (!isValidUuid(body.user_id)) return jsonResponse({ error: "invalid user_id" }, 400);
 
     // S1 (HIGH) — /push/send was previously UNAUTHENTICATED: anyone could push
     // arbitrary notifications to any user's devices (phishing/spam). Require
@@ -201,7 +213,9 @@ async function handlePushBroadcast(request: Request, env: Env): Promise<Response
     }
 
     const r = await fetch(url, { headers: { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}` } });
-    const subs = (await r.json()) as Array<{ endpoint: string; p256dh: string; auth: string }>;
+    // C4 — coerce to [] if Supabase returned an error object instead of an array.
+    const subsData = await r.json();
+    const subs = (Array.isArray(subsData) ? subsData : []) as Array<{ endpoint: string; p256dh: string; auth: string }>;
 
     const vapid = vapidFromEnv(env);
     let sent = 0, failed = 0;
@@ -228,7 +242,9 @@ async function runWeeklyDigest(env: Env) {
   const r = await fetch(`${env.SUPABASE_URL}/rest/v1/push_subscriptions?enabled=eq.true&select=endpoint,p256dh,auth`, {
     headers: { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}` },
   });
-  const subs = (await r.json()) as Array<{ endpoint: string; p256dh: string; auth: string }>;
+  // C4 — coerce to [] if Supabase returned an error object instead of an array.
+  const subsData = await r.json();
+  const subs = (Array.isArray(subsData) ? subsData : []) as Array<{ endpoint: string; p256dh: string; auth: string }>;
   const vapid = vapidFromEnv(env);
   for (const s of subs) {
     try { await sendWebPush(s, message, vapid); } catch {}
@@ -240,9 +256,17 @@ async function runWeeklyDigest(env: Env) {
 async function handleEmbed(request: Request, env: Env): Promise<Response> {
   try {
     const body = (await request.json()) as { text?: string; texts?: string[] };
-    const texts = body.texts ?? (body.text ? [body.text] : []);
+    const rawTexts = body.texts ?? (body.text ? [body.text] : []);
+    if (rawTexts.length === 0) return jsonResponse({ error: "text or texts required" }, 400);
+    if (rawTexts.length > 100) return jsonResponse({ error: "max 100 texts per call" }, 400);
+
+    // C2 — clamp each text to a sane max and drop empty/whitespace-only
+    // entries, so an oversized embed payload can't run up AI cost.
+    const MAX_EMBED_CHARS = 2000;
+    const texts = rawTexts
+      .map((t) => clampString(t, MAX_EMBED_CHARS))
+      .filter((t) => t.trim().length > 0);
     if (texts.length === 0) return jsonResponse({ error: "text or texts required" }, 400);
-    if (texts.length > 100) return jsonResponse({ error: "max 100 texts per call" }, 400);
 
     const result: any = await env.AI.run("@cf/baai/bge-m3", { text: texts });
     // bge-m3 returns { data: number[][] } or { shape, data }
@@ -267,13 +291,19 @@ async function handleSemanticSearch(request: Request, env: Env): Promise<Respons
     };
     if (!body.query) return jsonResponse({ error: "query required" }, 400);
 
-    const emb: any = await env.AI.run("@cf/baai/bge-m3", { text: [body.query] });
+    // C3 — clamp the query length before embedding (cost/abuse guard).
+    const query = clampString(body.query, 1000);
+    if (query.trim().length === 0) return jsonResponse({ error: "query required" }, 400);
+
+    const emb: any = await env.AI.run("@cf/baai/bge-m3", { text: [query] });
     const vec = emb?.data?.[0];
     if (!vec) return jsonResponse({ error: "embedding failed" }, 500);
 
     const kind = body.kind ?? "both";
-    const count = body.count ?? 10;
-    const threshold = body.threshold ?? 0.3;
+    // C3 — clamp match_count to [1,50] and threshold to [0,1] so an absurd
+    // value can't be passed to the Supabase RPC.
+    const count = clampNumber(body.count, 1, 50, 10);
+    const threshold = clampNumber(body.threshold, 0, 1, 0.3);
 
     const sbHeaders = {
       apikey: env.SUPABASE_KEY,

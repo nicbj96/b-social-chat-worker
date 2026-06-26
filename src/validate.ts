@@ -41,3 +41,22 @@ export function clampString(value: unknown, max: number): string {
   if (typeof value !== "string") return "";
   return value.length > max ? value.slice(0, max) : value;
 }
+
+/**
+ * Coerce `value` to a finite number clamped to the inclusive [min, max] range.
+ * Non-numbers, NaN, and ±Infinity fall back to `fallback`. Used to bound
+ * user-supplied search params (match_count / match_threshold) before they
+ * reach the Supabase RPC, so an absurd value can't run up cost or break the
+ * query. Assumes `min <= max`.
+ */
+export function clampNumber(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
+}
