@@ -37,7 +37,7 @@ interface ChatMessage {
 
 // CORS headers — tillad din frontend at kalde denne Worker
 const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*", // Skift til "https://b-social.net" i produktion
+  "Access-Control-Allow-Origin": "https://b-social.net",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Admin-Key",
 };
