@@ -66,19 +66,17 @@ if (!/SUPABASE_URL\s*=\s*"https:\/\/rbengtfrthqdfbcdcugp\.supabase\.co"/.test(wr
   findings.push("wrangler.toml must target Supabase project rbengtfrthqdfbcdcugp");
 }
 for (const required of [
-  'name = "PUBLIC_AI_RATE_LIMITER"',
-  'namespace_id = "92001"',
-  'name = "PUSH_RATE_LIMITER"',
-  'namespace_id = "92002"',
-  'name = "ADMIN_RATE_LIMITER"',
-  'namespace_id = "92003"',
+  'name = "RATE_LIMITER"',
+  'class_name = "RateLimitDurableObject"',
+  'new_sqlite_classes = ["RateLimitDurableObject"]',
 ]) {
-  if (!wrangler.includes(required)) findings.push(`wrangler.toml missing native rate-limit marker: ${required}`);
+  if (!wrangler.includes(required)) findings.push(`wrangler.toml missing Durable Object rate-limit marker: ${required}`);
 }
 
 const workerSource = await readFile(resolve(repoRoot, "src/index.ts"), "utf8");
 for (const required of [
   'import { enforceRateLimit',
+  'export { RateLimitDurableObject }',
   'extends RateLimitEnv',
   'await enforceRateLimit(request, env, url.pathname, CORS_HEADERS)',
 ]) {

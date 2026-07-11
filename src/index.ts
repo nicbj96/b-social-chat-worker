@@ -12,6 +12,8 @@ import { isSafeEntityId, isValidUuid, clampString, clampNumber } from "./validat
 import { guardedFetch } from "./fetchguard";
 import { enforceRateLimit, type RateLimitEnv } from "./ratelimit";
 
+export { RateLimitDurableObject } from "./rate-limit-do";
+
 // Env bindings
 interface Env extends RateLimitEnv {
   AI: any; // Workers AI binding

@@ -10,28 +10,15 @@ binding = "AI"
 [vars]
 SUPABASE_URL = "https://rbengtfrthqdfbcdcugp.supabase.co"
 
-# Native Cloudflare abuse budgets. Keys are opaque SHA-256(route + connecting IP)
-# values, so raw addresses never enter binding keys or application logs.
-[[ratelimits]]
-name = "PUBLIC_AI_RATE_LIMITER"
-namespace_id = "92001"
-  [ratelimits.simple]
-  limit = 30
-  period = 60
+# Strongly consistent abuse budgets. Each opaque SHA-256(route + connecting IP)
+# key maps to one SQLite-backed Durable Object instance.
+[[durable_objects.bindings]]
+name = "RATE_LIMITER"
+class_name = "RateLimitDurableObject"
 
-[[ratelimits]]
-name = "PUSH_RATE_LIMITER"
-namespace_id = "92002"
-  [ratelimits.simple]
-  limit = 60
-  period = 60
-
-[[ratelimits]]
-name = "ADMIN_RATE_LIMITER"
-namespace_id = "92003"
-  [ratelimits.simple]
-  limit = 30
-  period = 60
+[[migrations]]
+tag = "v1-rate-limiter"
+new_sqlite_classes = ["RateLimitDurableObject"]
 
 # Secrets (set via `npx wrangler secret put <NAME>`):
 #   SUPABASE_KEY      — Supabase anon or service_role key

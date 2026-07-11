@@ -44,16 +44,18 @@ describe("rateLimitActorKey", () => {
 });
 
 describe("enforceRateLimit", () => {
-  it("returns a structured 429 from the matching native binding", async () => {
+  it("returns a structured 429 from the Durable Object", async () => {
     const seenKeys: string[] = [];
     const env = {
-      PUBLIC_AI_RATE_LIMITER: {
-        limit: async ({ key }: { key: string }) => {
+      RATE_LIMITER: {
+        getByName: (key: string) => {
           seenKeys.push(key);
-          return { success: false };
+          return {
+            consume: async () => ({ success: false, retryAfterSeconds: 60 }),
+          };
         },
       },
-    };
+    } as any;
     const request = new Request("https://worker.example/chat", {
       method: "POST",
       headers: { "CF-Connecting-IP": "203.0.113.7" },
@@ -83,14 +85,16 @@ describe("enforceRateLimit", () => {
     expect((await enforceRateLimit(request, {}, "/chat", {}))?.status).toBe(429);
   });
 
-  it("falls back locally when the native binding throws", async () => {
+  it("falls back locally when the Durable Object throws", async () => {
     const env = {
-      PUBLIC_AI_RATE_LIMITER: {
-        limit: async () => {
-          throw new Error("binding unavailable");
-        },
+      RATE_LIMITER: {
+        getByName: () => ({
+          consume: async () => {
+            throw new Error("Durable Object unavailable");
+          },
+        }),
       },
-    };
+    } as any;
     const request = new Request("https://worker.example/search", {
       method: "POST",
       headers: { "CF-Connecting-IP": "203.0.113.71" },

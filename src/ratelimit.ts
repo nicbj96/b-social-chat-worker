@@ -1,3 +1,5 @@
+import type { RateLimitDurableObject } from "./rate-limit-do";
+
 export type RateLimitBucket = "public-ai" | "push" | "admin";
 
 const PUBLIC_AI_ROUTES = new Set(["/chat", "/embed", "/search"]);
@@ -21,14 +23,8 @@ export async function rateLimitActorKey(request: Request, pathname: string): Pro
   return `v1:${hex}`;
 }
 
-type RateLimitBinding = {
-  limit(input: { key: string }): Promise<{ success: boolean }>;
-};
-
 export interface RateLimitEnv {
-  PUBLIC_AI_RATE_LIMITER?: RateLimitBinding;
-  PUSH_RATE_LIMITER?: RateLimitBinding;
-  ADMIN_RATE_LIMITER?: RateLimitBinding;
+  RATE_LIMITER?: DurableObjectNamespace<RateLimitDurableObject>;
 }
 
 const LIMITS: Record<RateLimitBucket, number> = {
@@ -56,12 +52,13 @@ function consumeLocalBudget(key: string, bucket: RateLimitBucket, now = Date.now
 
 function rateLimitedResponse(
   corsHeaders: Record<string, string>,
+  retryAfterSeconds = 60,
 ): Response {
-  return new Response(JSON.stringify({ error: "rate_limited", retry_after_seconds: 60 }), {
+  return new Response(JSON.stringify({ error: "rate_limited", retry_after_seconds: retryAfterSeconds }), {
     status: 429,
     headers: {
       "Content-Type": "application/json",
-      "Retry-After": "60",
+      "Retry-After": String(retryAfterSeconds),
       ...corsHeaders,
     },
   });
@@ -76,24 +73,17 @@ export async function enforceRateLimit(
   const bucket = rateLimitBucketFor(request.method, pathname);
   if (!bucket) return null;
 
-  const binding = bucket === "public-ai"
-    ? env.PUBLIC_AI_RATE_LIMITER
-    : bucket === "push"
-    ? env.PUSH_RATE_LIMITER
-    : env.ADMIN_RATE_LIMITER;
   const key = await rateLimitActorKey(request, pathname);
-  if (!binding) {
+  if (!env.RATE_LIMITER) {
     return consumeLocalBudget(key, bucket) ? null : rateLimitedResponse(corsHeaders);
   }
 
-  let success = false;
   try {
-    ({ success } = await binding.limit({ key }));
+    const stub = env.RATE_LIMITER.getByName(key);
+    const decision = await stub.consume(LIMITS[bucket], WINDOW_MS);
+    return decision.success ? null : rateLimitedResponse(corsHeaders, decision.retryAfterSeconds);
   } catch {
-    console.error(JSON.stringify({ event: "native_rate_limiter_unavailable", bucket, pathname, fallback: "local" }));
+    console.error(JSON.stringify({ event: "durable_rate_limiter_unavailable", bucket, pathname, fallback: "local" }));
     return consumeLocalBudget(key, bucket) ? null : rateLimitedResponse(corsHeaders);
   }
-  if (success) return null;
-
-  return rateLimitedResponse(corsHeaders);
 }

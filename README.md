@@ -18,15 +18,15 @@ Production Cloudflare Worker for B-Social’s public discovery assistant, push d
 - `GET /health`
 - Authenticated founder endpoints: `/admin/ask`, `/admin/robot`, `/admin/fetch`, `/admin/transcribe`, `/admin/image`, `/admin/vision`
 
-## Native abuse budgets
+## Durable abuse budgets
 
-Cloudflare Rate Limiting bindings run before request parsing, authentication work, database calls, or AI usage:
+A strongly consistent SQLite-backed Durable Object runs before request parsing, authentication work, database calls, or AI usage:
 
 - Public AI (`/chat`, `/search`, `/embed`): 30 requests/minute per opaque route/actor key
 - Push (`/push/send`, `/push/broadcast`): 60 requests/minute
 - Founder admin (`/admin/*`): 30 requests/minute
 
-Raw connecting addresses are SHA-256 hashed before use as keys. If Cloudflare omits or fails a native binding, the Worker uses a capped in-isolate fallback budget instead of taking the route down. An exhausted budget returns 429 with `Retry-After`.
+Raw connecting addresses are SHA-256 hashed before use as keys. Every route/actor pair has one serialized durable counter. If the Durable Object is temporarily unavailable, the Worker uses a capped in-isolate fallback instead of taking public chat down. An exhausted budget returns 429 with `Retry-After`.
 
 ## Local verification
 
