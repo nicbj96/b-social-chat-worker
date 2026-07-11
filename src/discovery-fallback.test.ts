@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { formatFallbackReply, inferDiscoveryIntent, isAiQuotaError } from "./discovery-fallback";
+import { formatFallbackReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError } from "./discovery-fallback";
+
+describe("inferResponseLanguage", () => {
+  it("recognizes English discovery requests and defaults ambiguous text to Danish", () => {
+    expect(inferResponseLanguage("Find events in Copenhagen this weekend")).toBe("en");
+    expect(inferResponseLanguage("Find events i København denne weekend")).toBe("da");
+    expect(inferResponseLanguage("ok")).toBe("da");
+  });
+});
 
 describe("inferDiscoveryIntent", () => {
   it("infers a bounded nearby nature-place search", () => {
@@ -35,6 +43,7 @@ describe("formatFallbackReply", () => {
       inferDiscoveryIntent("Find 2 natursteder nær Frederikshavn."),
       [{ id: "p1", name: "Bangsbo hundeskov", city: "Frederikshavn" }, { id: "p2", name: "Strandby hundeskov", city: "Frederikshavn" }],
       [],
+      "da",
     );
     expect(response.reply).toContain("Bangsbo hundeskov — Frederikshavn");
     expect(response.reply).toContain("Strandby hundeskov — Frederikshavn");
@@ -44,7 +53,7 @@ describe("formatFallbackReply", () => {
   });
 
   it("is honest when a scoped search returns nothing", () => {
-    const response = formatFallbackReply(inferDiscoveryIntent("events i Malmö"), [], []);
+    const response = formatFallbackReply(inferDiscoveryIntent("events i Malmö"), [], [], "da");
     expect(response.reply).toContain("ingen resultater");
     expect(response.place_ids).toEqual([]);
     expect(response.event_ids).toEqual([]);
@@ -58,9 +67,33 @@ describe("formatFallbackReply", () => {
         { id: "p2", name: "Odense Zoo", city: "Odense Municipality" },
       ],
       [],
+      "da",
     );
     expect(response.reply.match(/Odense Zoo/g)).toHaveLength(1);
     expect(response.place_ids).toEqual(["p1"]);
+  });
+
+  it("renders English fallback copy for English requests", () => {
+    const response = formatFallbackReply(
+      inferDiscoveryIntent("Show me places in Copenhagen"),
+      [{ id: "p1", name: "The Lakes" }],
+      [],
+      "en",
+    );
+    expect(response.reply).toContain("Here are results directly from B-Social");
+    expect(response.reply).toContain("city not specified");
+    expect(response.reply).not.toContain("Her er resultater");
+    expect(response.reply).not.toContain("by ikke angivet");
+  });
+
+  it("renders English empty-result copy with an English city preposition", () => {
+    const response = formatFallbackReply(
+      inferDiscoveryIntent("Show events in Copenhagen"),
+      [],
+      [],
+      "en",
+    );
+    expect(response.reply).toBe("I found no results in Copenhagen with the selected filters.");
   });
 });
 

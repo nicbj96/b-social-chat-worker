@@ -1,4 +1,5 @@
 export type DiscoveryKind = "places" | "events" | "both";
+export type ResponseLanguage = "da" | "en";
 
 export type DiscoveryIntent = {
   kind: DiscoveryKind;
@@ -11,6 +12,13 @@ export type DiscoveryIntent = {
 
 type PlaceResult = { id?: string; name?: string; city?: string };
 type EventResult = { id?: string; title?: string; location?: string; date?: string };
+
+export function inferResponseLanguage(message: string): ResponseLanguage {
+  const text = String(message || "").toLocaleLowerCase("da-DK");
+  const englishScore = text.match(/\b(show|places?|near|in|this|tonight|around|with|please|recommend|what|where)\b/gu)?.length || 0;
+  const danishScore = text.match(/\b(vis|steder?|nær|i|denne|aften|omkring|med|venligst|anbefal|hvad|hvor)\b/gu)?.length || 0;
+  return englishScore > danishScore ? "en" : "da";
+}
 
 const KNOWN_CITIES = [
   "Frederikshavn", "København", "Copenhagen", "Aarhus", "Århus", "Aalborg", "Ålborg",
@@ -44,7 +52,12 @@ export function inferDiscoveryIntent(message: string, contextCity?: string): Dis
   return intent;
 }
 
-export function formatFallbackReply(intent: DiscoveryIntent, places: PlaceResult[], events: EventResult[]) {
+export function formatFallbackReply(
+  intent: DiscoveryIntent,
+  places: PlaceResult[],
+  events: EventResult[],
+  language: ResponseLanguage,
+) {
   const seenPlaces = new Set<string>();
   const uniquePlaces = places.filter((place) => {
     if (!place.id || !place.name) return false;
@@ -65,15 +78,32 @@ export function formatFallbackReply(intent: DiscoveryIntent, places: PlaceResult
   const remaining = Math.max(0, intent.limit - selectedPlaces.length);
   const eventCapacity = intent.kind === "events" ? intent.limit : remaining;
   const selectedEvents = uniqueEvents.slice(0, eventCapacity);
+  const copy = language === "en"
+    ? {
+        intro: "Here are results directly from B-Social:",
+        noResults: "I found no results",
+        cityMissing: "city not specified",
+        locationMissing: "location not specified",
+        cityPrefix: "in",
+        selectedFilters: "with the selected filters.",
+      }
+    : {
+        intro: "Her er resultater direkte fra B-Social:",
+        noResults: "Jeg fandt ingen resultater",
+        cityMissing: "by ikke angivet",
+        locationMissing: "sted ikke angivet",
+        cityPrefix: "i",
+        selectedFilters: "med de valgte filtre.",
+      };
   const lines = [
-    ...selectedPlaces.map((place) => `• ${place.name} — ${place.city || "by ikke angivet"}`),
-    ...selectedEvents.map((event) => `• ${event.title} — ${event.location || "sted ikke angivet"}${event.date ? ` (${event.date})` : ""}`),
+    ...selectedPlaces.map((place) => `• ${place.name} — ${place.city || copy.cityMissing}`),
+    ...selectedEvents.map((event) => `• ${event.title} — ${event.location || copy.locationMissing}${event.date ? ` (${event.date})` : ""}`),
   ].slice(0, intent.limit);
 
   return {
     reply: lines.length > 0
-      ? `Her er resultater direkte fra B-Social:\n${lines.join("\n")}`
-      : `Jeg fandt ingen resultater${intent.city ? ` i ${intent.city}` : ""} med de valgte filtre.`,
+      ? `${copy.intro}\n${lines.join("\n")}`
+      : `${copy.noResults}${intent.city ? ` ${copy.cityPrefix} ${intent.city}` : ""} ${copy.selectedFilters}`,
     tool_calls_made: ["direct_discovery_fallback"],
     place_ids: selectedPlaces.map((place) => String(place.id)).slice(0, intent.limit),
     event_ids: selectedEvents.map((event) => String(event.id)),

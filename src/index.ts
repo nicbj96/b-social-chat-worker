@@ -11,7 +11,7 @@ import { sendWebPush, type PushMessage } from "./webpush";
 import { isSafeEntityId, isValidUuid, clampString, clampNumber } from "./validate";
 import { guardedFetch } from "./fetchguard";
 import { enforceRateLimit, type RateLimitEnv } from "./ratelimit";
-import { formatFallbackReply, inferDiscoveryIntent, isAiQuotaError } from "./discovery-fallback";
+import { formatFallbackReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError } from "./discovery-fallback";
 
 export { RateLimitDurableObject } from "./rate-limit-do";
 
@@ -835,12 +835,32 @@ const MAX_MESSAGES = 30;        // keep only the last N turns
 const MAX_MESSAGE_CHARS = 4000; // per-message content cap
 const MAX_BODY_BYTES = 256 * 1024; // reject trivially-huge bodies early (256KB)
 
+function normalizePublicChatMessages(value: unknown): ChatMessage[] | null {
+  if (!Array.isArray(value)) return null;
+
+  const normalized: ChatMessage[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") return null;
+    const { role, content } = item as { role?: unknown; content?: unknown };
+    if (role !== "user" && role !== "assistant") return null;
+    if (typeof content !== "string") return null;
+    const clamped = clampString(content, MAX_MESSAGE_CHARS);
+    if (!clamped.trim()) return null;
+    normalized.push({ role, content: clamped });
+  }
+
+  const capped = normalized.slice(-MAX_MESSAGES);
+  return capped.some((message) => message.role === "user") ? capped : null;
+}
+
 async function directDiscoveryFallback(
   env: Env,
   userMessages: ChatMessage[],
   context: { user_prefs?: { city?: string } },
 ): Promise<Response> {
-  const intent = inferDiscoveryIntent(latestUserMessage(userMessages), context.user_prefs?.city);
+  const latestMessage = latestUserMessage(userMessages);
+  const intent = inferDiscoveryIntent(latestMessage, context.user_prefs?.city);
+  const language = inferResponseLanguage(latestMessage);
   const supabase = createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY);
   let places: any[] = [];
   let events: any[] = [];
@@ -863,7 +883,7 @@ async function directDiscoveryFallback(
     events = result.results || [];
   }
 
-  return jsonResponse(formatFallbackReply(intent, places, events));
+  return jsonResponse(formatFallbackReply(intent, places, events, language));
 }
 
 async function handleChat(request: Request, env: Env, executionCtx: ExecutionContext): Promise<Response> {
@@ -890,7 +910,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       } catch {}
     }
 
-    const body = (await request.json()) as {
+    let body: {
       messages?: { role: string; content: string }[];
       message?: string;
       context?: {
@@ -906,22 +926,29 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
         search_query?: string;
       };
     };
+    try {
+      const parsed: unknown = await request.json();
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return jsonResponse({ error: "Ugyldig forespørgsel" }, 400);
+      }
+      body = parsed as typeof body;
+    } catch {
+      return jsonResponse({ error: "Ugyldig JSON" }, 400);
+    }
 
-    // Support both { messages: [...] } and { message: "..." }
-    let userMessages: ChatMessage[];
-
-    if (body.messages && Array.isArray(body.messages)) {
-      // S4 — cap to the last MAX_MESSAGES turns and clamp each content length.
-      userMessages = body.messages
-        .slice(-MAX_MESSAGES)
-        .map((m) => ({
-          role: m.role as ChatMessage["role"],
-          content: clampString(m.content, MAX_MESSAGE_CHARS),
-        }));
-    } else if (body.message) {
-      userMessages = [{ role: "user", content: clampString(body.message, MAX_MESSAGE_CHARS) }];
-    } else {
+    // Support both { messages: [...] } and { message: "..." } while treating
+    // every caller-provided role as untrusted input.
+    const rawMessages = Array.isArray(body.messages)
+      ? body.messages
+      : typeof body.message === "string"
+        ? [{ role: "user", content: body.message }]
+        : null;
+    if (!rawMessages) {
       return jsonResponse({ error: "Mangler 'message' eller 'messages' felt" }, 400);
+    }
+    const userMessages = normalizePublicChatMessages(rawMessages);
+    if (!userMessages) {
+      return jsonResponse({ error: "Ugyldige chatbeskeder" }, 400);
     }
 
     executionCtx.waitUntil(notifyCommandCenter(env, latestUserMessage(userMessages), body.context || {}));
