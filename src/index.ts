@@ -10,9 +10,10 @@ import {
 import { sendWebPush, type PushMessage } from "./webpush";
 import { isSafeEntityId, isValidUuid, clampString, clampNumber } from "./validate";
 import { guardedFetch } from "./fetchguard";
+import { enforceRateLimit, type RateLimitEnv } from "./ratelimit";
 
 // Env bindings
-interface Env {
+interface Env extends RateLimitEnv {
   AI: any; // Workers AI binding
   SUPABASE_URL: string;
   SUPABASE_KEY: string;
@@ -56,6 +57,11 @@ const worker = {
 
     // Parse the URL
     const url = new URL(request.url);
+
+    // Native Cloudflare limits protect every AI-, push-, and admin-cost path
+    // before body parsing, authorization work, database calls, or model usage.
+    const rateLimitResponse = await enforceRateLimit(request, env, url.pathname, CORS_HEADERS);
+    if (rateLimitResponse) return rateLimitResponse;
 
     if (url.pathname === "/chat" && request.method === "POST") {
       return handleChat(request, env, ctx);

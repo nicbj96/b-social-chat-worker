@@ -65,6 +65,25 @@ if (!/^name\s*=\s*"b-social-chat"\s*$/m.test(wrangler)) findings.push("wrangler.
 if (!/SUPABASE_URL\s*=\s*"https:\/\/rbengtfrthqdfbcdcugp\.supabase\.co"/.test(wrangler)) {
   findings.push("wrangler.toml must target Supabase project rbengtfrthqdfbcdcugp");
 }
+for (const required of [
+  'name = "PUBLIC_AI_RATE_LIMITER"',
+  'namespace_id = "92001"',
+  'name = "PUSH_RATE_LIMITER"',
+  'namespace_id = "92002"',
+  'name = "ADMIN_RATE_LIMITER"',
+  'namespace_id = "92003"',
+]) {
+  if (!wrangler.includes(required)) findings.push(`wrangler.toml missing native rate-limit marker: ${required}`);
+}
+
+const workerSource = await readFile(resolve(repoRoot, "src/index.ts"), "utf8");
+for (const required of [
+  'import { enforceRateLimit',
+  'extends RateLimitEnv',
+  'await enforceRateLimit(request, env, url.pathname, CORS_HEADERS)',
+]) {
+  if (!workerSource.includes(required)) findings.push(`src/index.ts missing rate-limit wiring: ${required}`);
+}
 
 const reference = await readFile(resolve(repoRoot, "CLAUDE.md"), "utf8");
 for (const required of [

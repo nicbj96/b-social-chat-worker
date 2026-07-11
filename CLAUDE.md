@@ -74,6 +74,9 @@ Confirm the remote is exactly `https://github.com/nicbj96/b-social-chat-worker.g
 - Validate IDs, cap strings/arrays, enforce timeouts, and avoid reflecting sensitive upstream errors.
 - Consequential founder actions are draft-first and human-approved.
 - Keep CORS restricted to approved B-Social origins.
+- Native rate limits must cover public AI, push, and every `/admin/*` route before expensive work.
+- Rate-limit actor keys must remain opaque; never log raw connecting addresses or credentials.
+- Missing/failed rate-limit bindings fail closed with 503; exhausted budgets return 429.
 
 ## Completion standard
 

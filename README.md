@@ -18,6 +18,16 @@ Production Cloudflare Worker for B-Social’s public discovery assistant, push d
 - `GET /health`
 - Authenticated founder endpoints: `/admin/ask`, `/admin/robot`, `/admin/fetch`, `/admin/transcribe`, `/admin/image`, `/admin/vision`
 
+## Native abuse budgets
+
+Cloudflare Rate Limiting bindings run before request parsing, authentication work, database calls, or AI usage:
+
+- Public AI (`/chat`, `/search`, `/embed`): 30 requests/minute per opaque route/actor key
+- Push (`/push/send`, `/push/broadcast`): 60 requests/minute
+- Founder admin (`/admin/*`): 30 requests/minute
+
+Raw connecting addresses are SHA-256 hashed before use as keys. A missing or failed binding returns 503; an exhausted budget returns 429 with `Retry-After`.
+
 ## Local verification
 
 ```bash
