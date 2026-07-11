@@ -9,6 +9,7 @@ import {
 } from "./supabase-queries";
 import { sendWebPush, type PushMessage } from "./webpush";
 import { isSafeEntityId, isValidUuid, clampString, clampNumber } from "./validate";
+import { guardedFetch } from "./fetchguard";
 
 // Env bindings
 interface Env {
@@ -25,6 +26,9 @@ interface Env {
   COMMAND_CENTER_INGEST_TOKEN?: string;
   COMMAND_CENTER_ACCESS_CLIENT_ID?: string;
   COMMAND_CENTER_ACCESS_CLIENT_SECRET?: string;
+  ADMIN_ASK_KEY?: string; // Phase 2.5: gates /admin/ask (Telegram "bare spørg")
+  WHISPER_MODEL?: string; // Phase 7: override speech-to-text model
+  ELEVENLABS_API_KEY?: string; // Phase 7.4: if set, use ElevenLabs Scribe (best Danish STT) as primary
 }
 
 // Chat message type
@@ -75,6 +79,39 @@ const worker = {
       return handlePushBroadcast(request, env);
     }
 
+    // Admin "bare spørg" (Mission Control V2, Phase 2.5). Public doorway the
+    // Telegram bot can reach; relays to the dashboard /api/ask brain (which has
+    // env.AI + service-role Supabase) carrying the CF Access service token this
+    // worker already holds. Gated by the shared ADMIN_ASK_KEY.
+    if (url.pathname === "/admin/ask" && request.method === "POST") {
+      return handleAdminAsk(request, env);
+    }
+
+    // Fire a dashboard marketing robot on demand (cron also calls it Mondays).
+    if (url.pathname === "/admin/robot" && request.method === "POST") {
+      return handleRobotTrigger(request, env);
+    }
+
+    // SSRF-guarded external fetch (Phase 5) — research / partner-finder egress.
+    if (url.pathname === "/admin/fetch" && request.method === "POST") {
+      return handleAdminFetch(request, env);
+    }
+
+    // Speech-to-text (Phase 7) — Telegram voice notes → Whisper → text.
+    if (url.pathname === "/admin/transcribe" && request.method === "POST") {
+      return handleTranscribe(request, env);
+    }
+
+    // Text-to-image (Phase 7) — Flux generates ad imagery. Returns base64 PNG.
+    if (url.pathname === "/admin/image" && request.method === "POST") {
+      return handleImage(request, env);
+    }
+
+    // Image understanding (Phase 7) — describe a photo the founder shows us.
+    if (url.pathname === "/admin/vision" && request.method === "POST") {
+      return handleVision(request, env);
+    }
+
     if (url.pathname === "/health") {
       return jsonResponse({ status: "ok", service: "b-social-chat" });
     }
@@ -82,11 +119,351 @@ const worker = {
     return jsonResponse({ error: "Not found" }, 404);
   },
 
-  // Scheduled weekly digest (configured in wrangler.toml)
-  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(runWeeklyDigest(env));
+  // Scheduled jobs (configured in wrangler.toml crons):
+  //   "0 17 * * 5" (Fri 17:00) → weekly push digest
+  //   "0 6 * * 1"  (Mon 06:00) → trigger the ad-pack robot in the dashboard
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    if (controller.cron === "0 6 * * 1") {
+      ctx.waitUntil(callRobot(env, "adpack").then(() => {}));
+    } else if (controller.cron === "0 7 * * 3") {
+      ctx.waitUntil(callRobot(env, "partners").then(() => {}));
+    } else {
+      ctx.waitUntil(runWeeklyDigest(env));
+    }
   },
 };
+
+// Call a dashboard marketing robot (Mission Control V2, Phase 4). The robot logic
+// lives in the dashboard (env.AI + service role); this worker holds the CF Access
+// service token, so it is the doorway — fired by cron (scheduled) or on demand
+// (/admin/robot). Returns the dashboard's status + body.
+async function callRobot(env: Env, name: string): Promise<{ status: number; data: any }> {
+  if (!env.COMMAND_CENTER_INGEST_URL || !env.ADMIN_ASK_KEY) {
+    return { status: 503, data: { ok: false, error: "robot trigger not configured" } };
+  }
+  let url: string;
+  try {
+    url = new URL(`/api/robots/${name}`, env.COMMAND_CENTER_INGEST_URL).toString();
+  } catch {
+    return { status: 500, data: { ok: false, error: "bad command center url" } };
+  }
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "x-admin-ask-key": env.ADMIN_ASK_KEY,
+  };
+  if (env.COMMAND_CENTER_ACCESS_CLIENT_ID && env.COMMAND_CENTER_ACCESS_CLIENT_SECRET) {
+    headers["CF-Access-Client-Id"] = env.COMMAND_CENTER_ACCESS_CLIENT_ID;
+    headers["CF-Access-Client-Secret"] = env.COMMAND_CENTER_ACCESS_CLIENT_SECRET;
+  }
+  try {
+    const r = await fetch(url, { method: "POST", headers, body: "{}", signal: AbortSignal.timeout(60_000) });
+    const data = await r.json().catch(() => ({ ok: false, error: "bad robot response" }));
+    return { status: r.status, data };
+  } catch (err: any) {
+    return { status: 502, data: { ok: false, error: `robot call failed: ${String(err?.message || err)}` } };
+  }
+}
+
+// On-demand robot trigger (test / "kør nu"). Gated by the shared ADMIN_ASK_KEY.
+async function handleRobotTrigger(request: Request, env: Env): Promise<Response> {
+  if (!env.ADMIN_ASK_KEY) return jsonResponse({ ok: false, error: "not configured" }, 503);
+  if (request.headers.get("X-Admin-Ask-Key") !== env.ADMIN_ASK_KEY) {
+    return jsonResponse({ ok: false, error: "unauthorized" }, 401);
+  }
+  let name = "";
+  try {
+    const b = (await request.json()) as { name?: string };
+    name = String(b?.name || "");
+  } catch {
+    return jsonResponse({ ok: false, error: "bad json" }, 400);
+  }
+  if (!/^[a-z]+$/.test(name)) return jsonResponse({ ok: false, error: "bad robot name" }, 400);
+  const res = await callRobot(env, name);
+  return jsonResponse(res.data, res.status);
+}
+
+// SSRF-guarded external fetch (Phase 5). Gated by the shared ADMIN_ASK_KEY — only
+// internal callers (the research tool, the partner-finder) reach the open web,
+// and every URL passes through guardedFetch's allow-rules + redirect re-checks.
+async function handleAdminFetch(request: Request, env: Env): Promise<Response> {
+  if (!env.ADMIN_ASK_KEY) return jsonResponse({ ok: false, error: "not configured" }, 503);
+  if (request.headers.get("X-Admin-Ask-Key") !== env.ADMIN_ASK_KEY) {
+    return jsonResponse({ ok: false, error: "unauthorized" }, 401);
+  }
+  let target = "";
+  try {
+    const b = (await request.json()) as { url?: string };
+    target = String(b?.url || "");
+  } catch {
+    return jsonResponse({ ok: false, error: "bad json" }, 400);
+  }
+  if (!target) return jsonResponse({ ok: false, error: "url required" }, 400);
+  const result = await guardedFetch(target);
+  return jsonResponse(result, result.ok ? 200 : 400);
+}
+
+// Speech-to-text via Workers AI Whisper (Phase 7). Body = raw audio bytes (e.g. a
+// Telegram voice note, OGG/Opus). Whisper is multilingual → Danish works. Gated by
+// the shared ADMIN_ASK_KEY. Returns { ok, text }.
+// Voice is ALWAYS Danish — but the founder speaks DANGLISH: Danish sentences with
+// English tech/command words kept in English ("kør ad-pack", "vores MRR", "åbn
+// dashboard"). Whisper only honors the LAST ~224 tokens of initial_prompt and only
+// for the first 30s, so this is deliberately SHORT and natural (a flat word-dump
+// hurts). The big glossary lives in DA_GLOSSARY (the LLM correction pass has room
+// the Whisper prompt does not). Rarest proper nouns go LAST — that's where Whisper
+// weights hardest. This only biases spelling of proper nouns; it is not the fix.
+const DA_VOICE_VOCAB =
+  "Kommando på dansk til B-Social admin-bot. Vi blander engelske fagord ind i dansk: " +
+  "ad-pack, waitlist, MRR, Plus, dashboard, events, venues, partner-liste, newsletter. " +
+  "Fx: kør ad-pack, find partnere, vis køen, hvad venter på mit ja, godkend, afvis, fortryd, " +
+  "lav et billede, hvor mange brugere, hvor mange events i weekenden, hvordan går det. " +
+  "Steder: København, Aarhus, Odense, Aalborg, Berlin.";
+
+// The COMPREHENSIVE Danish knowledge the corrector uses — this is where "no holding
+// back" belongs. Unlike Whisper's ~224-token prompt cap, the LLM reads all of this.
+// It teaches the corrector (1) which English tech words are CORRECT and must never
+// be translated, (2) the full command surface, and (3) the exact acoustic mis-hears
+// Danish speech produces, so it can undo them. Extend freely — only the LLM sees it.
+const DA_GLOSSARY =
+  // — Danglish: English words that are CORRECT inside Danish sentences (never translate) —
+  "ENGELSKE FAGORD DER SKAL BEVARES PRÆCIS (aldrig oversæt til dansk): ad-pack, waitlist, MRR, ARR, " +
+  "Plus, Plus-abonnent, dashboard, event, events, venue, venues, partner, partner-liste, newsletter, " +
+  "robot, robotter, growth, churn, lead, leads, pipeline, deal, deals, onboarding, review, brief, " +
+  "digest, import, export, feed, tag, tags, filter, preview, draft, backup, cron, worker, webhook, " +
+  "Telegram, Supabase, Cloudflare, Resend, Stripe, KPI, ROI, CTR, DAU, MAU.\n" +
+  // — Commands the founder says (and their common variants) —
+  "KOMMANDOER: kør ad-pack / lav en annonce / lav reklame; find partnere / lav en partner-liste / " +
+  "hvem kan vi samarbejde med; frys robotterne / sæt robotterne på pause / stop robotterne; " +
+  "start robotterne / genoptag robotterne; vis køen / hvad venter på mit ja / hvad skal jeg godkende / " +
+  "vis udkast; godkend / ja / send den; afvis / nej / drop den; fortryd / stop / annuller; " +
+  "ryd op i køen / slet gamle udkast; lav et billede / lav grafik; undersøg / tjek / kig på; " +
+  "svar kunden / svar på beskeden; husk at …; hvor mange brugere / events / venues / på waitlist; " +
+  "hvor mange events i weekenden / i dag / i morgen / denne uge; hvordan går det / hvordan udvikler vi os / " +
+  "vokser vi; hvad er vores MRR / hvad tjener vi; hvad skete der i nat / hvad har robotterne lavet.\n" +
+  // — Domain nouns (Danish side) —
+  "FAGORD (dansk): arrangement, arrangementer, begivenhed, sted, steder, spillested, bruger, brugere, " +
+  "medlem, venteliste, abonnent, abonnement, omsætning, indtægt, indbakke, besked, beskeder, henvendelse, " +
+  "kunde, kunder, samarbejdspartner, udkast, annonce, annoncer, nyhedsbrev, kampagne, statistik, " +
+  "nøgletal, vækst, kontrolcenter, kø.\n" +
+  // — Danish + Nordic/EU place names the founder actually says —
+  "STEDER: København, Aarhus, Odense, Aalborg, Esbjerg, Randers, Kolding, Horsens, Vejle, Roskilde, " +
+  "Herning, Helsingør, Silkeborg, Næstved, Fredericia, Viborg, Frederiksberg, Nørrebro, Vesterbro, " +
+  "Amager, Malmö, Göteborg, Stockholm, Oslo, Bergen, Helsinki, Berlin, Hamborg, Amsterdam, London, Paris.\n" +
+  // — The exact mis-hears Danish speech produces → what was really meant —
+  "TYPISKE HØR-FEJL (venstre = forkert, højre = rettet): 'at pakke'/'ad pak'/'ad pack' → ad-pack; " +
+  "'vent liste'/'weit list'/'wait list' → waitlist; 'em og er'/'em år er'/'em-r-r' → MRR; " +
+  "'plus abonnenter' → Plus-abonnenter; 'partner liste' → partner-liste; 'news letter' → newsletter; " +
+  "'dash board' → dashboard; 'ivent'/'ivents' → event/events; 'vænju'/'vænjus' → venue/venues; " +
+  "'fris robotterne' → frys robotterne; 'gør kend'/'god kendt' → godkend; 'af viss' → afvis; " +
+  "'for tryd' → fortryd; 'kø en'/'kunden' → køen (når det handler om udkast); " +
+  "'i går' vs 'i dag', 'to' vs 'tolv' vs 'tyve', 'Ålborg' → Aalborg, 'Århus' → Aarhus.";
+
+// Second-pass correction: this is the REAL Danish upgrade (not the Whisper prompt).
+// A small LLM cleans up the acoustic model's Danish mis-hears using the full
+// DA_GLOSSARY — which is far larger than anything Whisper's 224-token prompt can
+// hold. It knows the danglish rule (keep English tech words), the command surface,
+// and the exact mis-hears to undo. Conservative by design: on any doubt (empty, too
+// long/short, refusal-ish) it returns the raw transcription unchanged.
+async function correctDanish(env: Env, raw: string): Promise<string> {
+  const text = (raw || "").trim();
+  if (!text || text.length > 400) return text;
+  try {
+    const out: any = await env.AI.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
+      messages: [
+        {
+          role: "system",
+          content:
+            "Du renser en dansk tale-transskription fra en B-Social admin-bot. Talen er ALTID dansk, men vi taler DANGLISH: " +
+            "danske sætninger med engelske fag- og kommando-ord indeni. " +
+            "REGLER: (1) Behold ALLE engelske fagord præcis som de er — oversæt dem ALDRIG til dansk " +
+            "(fx 'ad-pack' må aldrig blive 'reklamepakke', 'waitlist' aldrig 'venteliste', 'dashboard' aldrig 'kontrolpanel'). " +
+            "(2) Ret KUN tydelige hør-fejl til det ord der faktisk blev sagt, ud fra ordbogen nedenfor. " +
+            "(3) Bevar betydning og ordrækkefølge 100%. Tilføj intet, forklar intet, gæt ikke nye ord. " +
+            "(4) Er sætningen allerede korrekt, så gengiv den uændret. Svar KUN med den rensede sætning, intet andet.\n\n" +
+            DA_GLOSSARY,
+        },
+        { role: "user", content: `Rens denne transskription (svar kun med sætningen): "${text}"` },
+      ],
+      temperature: 0.1,
+      max_completion_tokens: 160,
+    });
+    let fixed = String(out?.response ?? out?.content ?? "").trim();
+    fixed = fixed.replace(/^["'«»\s]+|["'«»\s]+$/g, "").replace(/^(rettet|korrekt|renset|svar)[:\-]\s*/i, "").trim();
+    // Guards against over-correction / hallucination: keep raw if wildly different.
+    if (!fixed || fixed.length > text.length * 2.5 || fixed.length < text.length * 0.4) return text;
+    return fixed;
+  } catch {
+    return text;
+  }
+}
+
+// Tier 1 STT: ElevenLabs Scribe — best Danish by far (≈4% WER vs ≈15% for Whisper
+// turbo). One multipart POST; it decodes raw Telegram OGG/Opus itself. Only used
+// when ELEVENLABS_API_KEY is set: the moment the founder runs
+// `wrangler secret put ELEVENLABS_API_KEY` this becomes primary with no code change.
+// Throws on any non-2xx / empty so the caller falls back to Cloudflare Whisper.
+async function transcribeScribe(env: Env, bytes: Uint8Array): Promise<string> {
+  const fd = new FormData();
+  fd.append("file", new Blob([bytes], { type: "audio/ogg" }), "audio.ogg");
+  fd.append("model_id", "scribe_v1");
+  fd.append("language_code", "da"); // voice is ALWAYS Danish
+  const r = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
+    method: "POST",
+    headers: { "xi-api-key": env.ELEVENLABS_API_KEY as string },
+    body: fd,
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!r.ok) throw new Error(`scribe ${r.status}`);
+  const data: any = await r.json();
+  const text = String(data?.text ?? "").trim();
+  if (!text) throw new Error("scribe empty");
+  return text;
+}
+
+// Tier 2 STT: Cloudflare Whisper large-v3-turbo. Forces Danish, disables
+// condition_on_previous_text (CF default is TRUE → repetition/drift hallucinations
+// on short one-shot commands) and trims silence with vad_filter. initial_prompt only
+// SOFTLY biases proper-noun spelling — the real cleanup happens in correctDanish().
+async function transcribeTurbo(env: Env, bytes: Uint8Array): Promise<{ text: string; model: string }> {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  const audioB64 = btoa(binary);
+  const model = env.WHISPER_MODEL || "@cf/openai/whisper-large-v3-turbo";
+  const out: any = await env.AI.run(model, {
+    audio: audioB64,
+    task: "transcribe",
+    language: "da", // voice is ALWAYS Danish — force it, never auto-detect
+    condition_on_previous_text: false,
+    vad_filter: true,
+    initial_prompt: DA_VOICE_VOCAB,
+  });
+  return { text: String(out?.text ?? "").trim(), model };
+}
+
+async function handleTranscribe(request: Request, env: Env): Promise<Response> {
+  if (!env.ADMIN_ASK_KEY) return jsonResponse({ ok: false, error: "not configured" }, 503);
+  if (request.headers.get("X-Admin-Ask-Key") !== env.ADMIN_ASK_KEY) {
+    return jsonResponse({ ok: false, error: "unauthorized" }, 401);
+  }
+  let bytes: Uint8Array;
+  try {
+    const buf = await request.arrayBuffer();
+    if (!buf || buf.byteLength === 0) return jsonResponse({ ok: false, error: "no audio" }, 400);
+    if (buf.byteLength > 8_000_000) return jsonResponse({ ok: false, error: "audio too large" }, 400);
+    bytes = new Uint8Array(buf);
+  } catch {
+    return jsonResponse({ ok: false, error: "could not read audio" }, 400);
+  }
+
+  // STT ladder, best Danish first: ElevenLabs Scribe (if key) → CF turbo → base
+  // Whisper. Whatever wins goes through the danglish-aware correction pass. Voice
+  // never dies outright — it just degrades to a cheaper model.
+  let text = "";
+  let model = "";
+  let usedFallback = false;
+  let lastErr: any = null;
+
+  if (env.ELEVENLABS_API_KEY) {
+    try {
+      text = await transcribeScribe(env, bytes);
+      model = "elevenlabs/scribe_v1";
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  if (!text) {
+    try {
+      const r = await transcribeTurbo(env, bytes);
+      text = r.text;
+      model = r.model;
+      usedFallback = Boolean(env.ELEVENLABS_API_KEY); // Scribe was meant to be primary
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  if (!text) {
+    // Last resort: base Whisper (no language control, but better than silence).
+    try {
+      const out: any = await env.AI.run("@cf/openai/whisper", { audio: [...bytes] });
+      text = String(out?.text ?? "").trim();
+      model = "@cf/openai/whisper";
+      usedFallback = true;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  if (!text) {
+    return jsonResponse(
+      { ok: false, error: `transcribe failed: ${String(lastErr?.message || lastErr || "no text").slice(0, 160)}` },
+      502
+    );
+  }
+
+  // The real Danish fix: clean domain terms/commands + protect danglish words.
+  text = await correctDanish(env, text);
+  return jsonResponse({ ok: true, text, model, fallback: usedFallback });
+}
+
+// Text-to-image via Workers AI Flux (Phase 7). Returns { ok, image_b64 } (PNG,
+// base64). Gated by ADMIN_ASK_KEY. The prompt is capped to keep it cheap.
+async function handleImage(request: Request, env: Env): Promise<Response> {
+  if (!env.ADMIN_ASK_KEY) return jsonResponse({ ok: false, error: "not configured" }, 503);
+  if (request.headers.get("X-Admin-Ask-Key") !== env.ADMIN_ASK_KEY) {
+    return jsonResponse({ ok: false, error: "unauthorized" }, 401);
+  }
+  let prompt = "";
+  try {
+    const b = (await request.json()) as { prompt?: string };
+    prompt = clampString(String(b?.prompt || ""), 800);
+  } catch {
+    return jsonResponse({ ok: false, error: "bad json" }, 400);
+  }
+  if (!prompt.trim()) return jsonResponse({ ok: false, error: "prompt required" }, 400);
+  try {
+    const out: any = await env.AI.run("@cf/black-forest-labs/flux-1-schnell", { prompt, steps: 4 });
+    // Flux returns { image: "<base64 jpeg>" }.
+    const image = out?.image ? String(out.image) : "";
+    if (!image) return jsonResponse({ ok: false, error: "no image returned" }, 502);
+    return jsonResponse({ ok: true, image_b64: image, mime: "image/jpeg" });
+  } catch (err: any) {
+    return jsonResponse({ ok: false, error: `image failed: ${String(err?.message || err).slice(0, 160)}` }, 502);
+  }
+}
+
+// Image understanding via Workers AI vision (Phase 7). Body = { image_b64, prompt? }.
+// Returns { ok, text } describing the picture. Gated by ADMIN_ASK_KEY, size-capped.
+async function handleVision(request: Request, env: Env): Promise<Response> {
+  if (!env.ADMIN_ASK_KEY) return jsonResponse({ ok: false, error: "not configured" }, 503);
+  if (request.headers.get("X-Admin-Ask-Key") !== env.ADMIN_ASK_KEY) {
+    return jsonResponse({ ok: false, error: "unauthorized" }, 401);
+  }
+  let b64 = "";
+  let prompt = "";
+  try {
+    const b = (await request.json()) as { image_b64?: string; prompt?: string };
+    b64 = String(b?.image_b64 || "").replace(/^data:[^,]+,/, ""); // strip any data: prefix
+    prompt = clampString(String(b?.prompt || "Describe this image in detail — what it shows, style, mood, colors — for a marketer who might recreate it."), 500);
+  } catch {
+    return jsonResponse({ ok: false, error: "bad json" }, 400);
+  }
+  if (!b64) return jsonResponse({ ok: false, error: "image_b64 required" }, 400);
+  if (b64.length > 8_000_000) return jsonResponse({ ok: false, error: "image too large" }, 400);
+  try {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const out: any = await env.AI.run("@cf/llava-hf/llava-1.5-7b-hf", { image: [...bytes], prompt, max_tokens: 300 });
+    const text = String(out?.description ?? out?.response ?? "").trim();
+    if (!text) return jsonResponse({ ok: false, error: "no description" }, 502);
+    return jsonResponse({ ok: true, text });
+  } catch (err: any) {
+    return jsonResponse({ ok: false, error: `vision failed: ${String(err?.message || err).slice(0, 160)}` }, 502);
+  }
+}
+
 
 // Wrap with Sentry — auto-captures unhandled errors in fetch + scheduled.
 // No-ops cleanly when SENTRY_DSN is unset (e.g. local dev).
@@ -385,6 +762,63 @@ async function notifyCommandCenter(env: Env, message: string, context: unknown) 
       },
     }),
   });
+}
+
+// ── Admin "bare spørg" relay (Phase 2.5) ───────────────────────────────────
+// telegram-notify (a Supabase edge fn, no CF Access token) → this public worker
+// (holds the CF Access service token) → dashboard /api/ask (env.AI + service
+// role). The worker is a thin authenticated relay; the brain lives in the
+// dashboard so there is ONE toolset and no service-role key in this public worker.
+async function handleAdminAsk(request: Request, env: Env): Promise<Response> {
+  if (!env.ADMIN_ASK_KEY) {
+    return jsonResponse({ ok: false, error: "admin ask not configured (set ADMIN_ASK_KEY)" }, 503);
+  }
+  if (request.headers.get("X-Admin-Ask-Key") !== env.ADMIN_ASK_KEY) {
+    return jsonResponse({ ok: false, error: "unauthorized" }, 401);
+  }
+  if (!env.COMMAND_CENTER_INGEST_URL) {
+    return jsonResponse({ ok: false, error: "command center url not configured" }, 503);
+  }
+
+  let askUrl: string;
+  try {
+    askUrl = new URL("/api/ask", env.COMMAND_CENTER_INGEST_URL).toString();
+  } catch {
+    return jsonResponse({ ok: false, error: "bad command center url" }, 500);
+  }
+
+  let payload: { question?: string; message?: string; messages?: unknown } = {};
+  try {
+    payload = (await request.json()) as typeof payload;
+  } catch {
+    return jsonResponse({ ok: false, error: "bad json" }, 400);
+  }
+
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "x-admin-ask-key": env.ADMIN_ASK_KEY,
+  };
+  // Same CF Access service token used for inbox-ingest — gets us through Access.
+  if (env.COMMAND_CENTER_ACCESS_CLIENT_ID && env.COMMAND_CENTER_ACCESS_CLIENT_SECRET) {
+    headers["CF-Access-Client-Id"] = env.COMMAND_CENTER_ACCESS_CLIENT_ID;
+    headers["CF-Access-Client-Secret"] = env.COMMAND_CENTER_ACCESS_CLIENT_SECRET;
+  }
+
+  try {
+    const r = await fetch(askUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        question: clampString(String(payload.question || payload.message || ""), 2000),
+        messages: Array.isArray(payload.messages) ? payload.messages : undefined,
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    const data = await r.json().catch(() => ({ ok: false, error: "bad upstream response" }));
+    return jsonResponse(data, r.status);
+  } catch (err: any) {
+    return jsonResponse({ ok: false, error: "ask relay failed", details: String(err?.message || err) }, 502);
+  }
 }
 
 // S4 — conservative input caps (cost + prompt-injection blowup guard).

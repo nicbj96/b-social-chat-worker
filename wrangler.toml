@@ -18,6 +18,9 @@ SUPABASE_URL = "https://rbengtfrthqdfbcdcugp.supabase.co"
 #   PUSH_ADMIN_KEY    — admin auth for /push/broadcast (optional)
 #   SENTRY_DSN        — Sentry DSN for error tracking (optional)
 
-# Weekly digest: every Friday 17:00 UTC (18:00 CET / 19:00 CEST)
+# Scheduled jobs:
+#   Fri 17:00 UTC → weekly push digest
+#   Mon 06:00 UTC → ad-pack robot (drafts 3 ads from the week's best events → queue)
+#   Wed 07:00 UTC → partner-finder robot (top venues → outreach target list → queue)
 [triggers]
-crons = ["0 17 * * 5"]
+crons = ["0 17 * * 5", "0 6 * * 1", "0 7 * * 3"]
