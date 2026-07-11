@@ -1,151 +1,84 @@
-# B-Social Chat Worker — REFERENCE (Read this FIRST)
+# B-Social Chat Worker — canonical reference
 
-> **Last updated:** April 17, 2026
+> Last verified: 2026-07-11
 
----
+## Production ownership
 
-## What this repo is
+- **Repository:** `nicbj96/b-social-chat-worker`
+- **Canonical local path:** `C:\Users\45536\Desktop\CODING B-SOCIAL\b-social-chat-worker-nic-live`
+- **Branch:** `main`
+- **Cloudflare Worker:** `b-social-chat`
+- **Live base URL:** `https://b-social-chat.nicbj96.workers.dev`
+- **Supabase:** `rbengtfrthqdfbcdcugp` (`B-social1`)
+- **Frontend:** `nicbj96/b-social-pages` under the same `CODING B-SOCIAL` monorepo
 
-Cloudflare Worker that powers the AI chat feature on b-social.net.
+This folder is the **only** valid chat-worker deployment source on this machine. Never deploy from an archive, loose Desktop clone, fork, or alternate organization.
 
-- **GitHub:** `bbssocialnico-bit/b-social-chat-worker`
-- **Local path:** `C:\Users\45536\Desktop\b-social-chat-worker`
-- **Live URL:** `https://b-social-chat.nicbj96.workers.dev/chat`
-- **Endpoint:** `POST /chat` with JSON body `{ messages, context }`
+## Responsibilities
 
----
+Public:
+- `POST /chat` — grounded event/place assistant
+- `POST /search` — search support
+- `POST /embed` — embeddings
+- `POST /push/*` — authenticated push delivery
+- `GET /health` — liveness
 
-## Companion repo (frontend)
+Founder/admin (all gated by `ADMIN_ASK_KEY`):
+- `POST /admin/ask` — relay to Command Center brain
+- `POST /admin/robot` — run an approved robot
+- `POST /admin/fetch` — SSRF-guarded public-web research
+- `POST /admin/transcribe` — admin voice transcription
+- `POST /admin/image` — admin image generation
+- `POST /admin/vision` — admin image understanding
 
-- **GitHub:** `bbssocialnico-bit/b-social-pages`
-- **Local path:** `C:\Users\45536\Desktop\b-social-repo`
+Scheduled:
+- Friday 17:00 UTC — weekly push digest
+- Monday 06:00 UTC — ad-pack robot
+- Wednesday 07:00 UTC — partner-finder robot
 
-Both repos must be kept in sync. Always push to BOTH when making changes that affect both.
+## Models and data
 
----
+- Main model: `@cf/meta/llama-4-scout-17b-16e-instruct`
+- Search tools query live B-Social Supabase data.
+- The worker must never invent event/place facts when tools fail.
+- Secrets live in Cloudflare Worker secrets, never in source or documentation.
 
-## Deploy
+## Required verification
 
-```powershell
-cd C:\Users\45536\Desktop\b-social-chat-worker
+```bash
+npm run verify:local
+```
 
-# Deploy to Cloudflare (live immediately)
+This must pass before every deploy. `npm run deploy` runs it automatically through `predeploy`.
+
+## Safe deploy sequence
+
+```bash
+git status --short
+git remote get-url origin
+npm run verify:local
+git add <narrow file list>
+git commit -m "..."
+git push origin main
 npm run deploy
-
-# Also push to GitHub (REQUIRED every time)
-git add src/index.ts
-"Worker: your change description" | Out-File -FilePath commitmsg.txt -Encoding utf8
-git commit -F commitmsg.txt
-git push https://REDACTED_GITHUB_PAT@github.com/bbssocialnico-bit/b-social-chat-worker.git main
+curl -f https://b-social-chat.nicbj96.workers.dev/health
 ```
 
-> Worker changes are live immediately — no CI pipeline needed.
+Confirm the remote is exactly `https://github.com/nicbj96/b-social-chat-worker.git` before deploying. Push and deploy must reference the same reviewed commit.
 
----
+## Security rules
 
-## GitHub PAT
+- Never print, commit, paste, or document secret values.
+- `/push/send` and all `/admin/*` endpoints must fail closed without credentials.
+- All outbound arbitrary URLs must pass through `src/fetchguard.ts`.
+- Validate IDs, cap strings/arrays, enforce timeouts, and avoid reflecting sensitive upstream errors.
+- Consequential founder actions are draft-first and human-approved.
+- Keep CORS restricted to approved B-Social origins.
 
-```
-REDACTED_GITHUB_PAT
-```
+## Completion standard
 
----
-
-## Architecture
-
-### Model
-`@cf/meta/llama-4-scout-17b-16e-instruct` (Cloudflare Workers AI)
-
-### Tool calls
-The model can call two tools to fetch live data from Supabase:
-- `search_events` — searches events by title/description/category
-- `search_places` — searches places by name/tags
-
-### Context injection (system prompt)
-The worker builds a dynamic system prompt based on `context` in the request body:
-
-| Context field | What it does |
-|---|---|
-| `pageType` | Tells AI what page user is on (feed, search, event, place, map) |
-| `search_query` | Current search term |
-| `entity_id` + `entity_type` | Fetches event/place details from Supabase, injects title/tags |
-| `recent_views` | Recently viewed event/place IDs |
-| `last_session` | Last session summary |
-
-### Time/season context
-Automatically injected: day name, time of day, season, weekend/weekday.
-
----
-
-## File structure
-
-```
-src/
-  index.ts        ← main worker (all logic here)
-wrangler.toml     ← worker config (name: b-social-chat)
-package.json      ← deps: @cloudflare/workers-types, typescript
-tsconfig.json
-```
-
----
-
-## Supabase REST API
-
-Worker queries Supabase directly via REST (not the JS client):
-
-```
-https://rbengtfrthqdfbcdcugp.supabase.co/rest/v1/events?...
-Headers: apikey: <anon key>, Authorization: Bearer <anon key>
-```
-
-Anon key: stored in Cloudflare Worker secrets (`SUPABASE_KEY`).
-
----
-
-## Request format (from frontend)
-
-```json
-{
-  "messages": [
-    { "role": "user", "content": "Find events near me this weekend" }
-  ],
-  "context": {
-    "pageType": "feed",
-    "search_query": "",
-    "entity_id": "123",
-    "entity_type": "event",
-    "recent_views": ["event:45", "place:12"],
-    "last_session": "Looked at concerts last time"
-  }
-}
-```
-
----
-
-## Common issues
-
-### Worker changes not showing on site
-- Worker deploys instantly via `npm run deploy`
-- If the frontend is not calling the worker, check `AIChatWidget.tsx` and `Soeg.tsx` — they POST to `https://b-social-chat.nicbj96.workers.dev/chat`
-
-### Worker code out of sync with GitHub
-- Always run `git push ...` after `npm run deploy`
-- This was a historical problem — the worker was deployed many times without ever being pushed to GitHub
-
-### Supabase entity lookup failing
-- Check `SUPABASE_KEY` secret is set in Cloudflare dashboard for this worker
-- Cloudflare dashboard → Workers → b-social-chat → Settings → Variables
-
----
-
-## Brief for new Claude sessions
-
-```
-This is the Cloudflare Worker for B-Social AI chat.
-GitHub: bbssocialnico-bit/b-social-chat-worker
-Local: C:\Users\45536\Desktop\b-social-chat-worker
-Deploy: npm run deploy (then git push to keep GitHub in sync)
-PAT: REDACTED_GITHUB_PAT
-Frontend lives at: bbssocialnico-bit/b-social-pages (C:\Users\45536\Desktop\b-social-repo)
-Worker URL: https://b-social-chat.nicbj96.workers.dev/chat
-```
+A change is complete only when:
+1. Tests, TypeScript, production dependency audit, and safety guard pass.
+2. The commit is pushed to `nicbj96/b-social-chat-worker`.
+3. The worker is deployed from this canonical folder.
+4. `/health` and changed endpoint behavior are verified live.

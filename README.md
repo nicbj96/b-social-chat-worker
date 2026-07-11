@@ -1,50 +1,42 @@
-# b-social-chat-worker
+# B-Social Chat Worker
 
-Cloudflare Worker powering the AI chat feature for [b-social.net](https://b-social.net).
+Production Cloudflare Worker for B-Social’s public discovery assistant, push delivery, and authenticated founder automation.
 
-## Live URL
+## Canonical ownership
 
-`POST https://b-social-chat.nicbj96.workers.dev/chat`
+- Repository: `https://github.com/nicbj96/b-social-chat-worker`
+- Local: `C:\Users\45536\Desktop\CODING B-SOCIAL\b-social-chat-worker-nic-live`
+- Worker: `b-social-chat`
+- Live: `https://b-social-chat.nicbj96.workers.dev`
+- Frontend: `https://github.com/nicbj96/b-social-pages`
+- Supabase: `rbengtfrthqdfbcdcugp`
 
-## What it does
+## Endpoints
 
-- Accepts chat messages + page context from the frontend
-- Uses Cloudflare Workers AI (`@cf/meta/llama-4-scout-17b-16e-instruct`) with tool calls
-- Tools: `search_events`, `search_places` → queries Supabase REST API live
-- Injects time/day/season context automatically
-- Injects entity details when user is viewing a specific event or place
-- Returns AI reply + any matched event/place IDs for the frontend to display
+- `POST /chat`, `/search`, `/embed`
+- `POST /push/*`
+- `GET /health`
+- Authenticated founder endpoints: `/admin/ask`, `/admin/robot`, `/admin/fetch`, `/admin/transcribe`, `/admin/image`, `/admin/vision`
 
-## Request format
+## Local verification
 
-```json
-{
-  "messages": [{ "role": "user", "content": "Find jazz events this weekend" }],
-  "context": {
-    "pageType": "feed",
-    "search_query": "",
-    "entity_id": "123",
-    "entity_type": "event"
-  }
-}
+```bash
+npm install
+npm run verify:local
 ```
 
 ## Deploy
 
+Deploy **only** from this canonical folder:
+
 ```bash
+git remote get-url origin
+npm run verify:local
+git push origin main
 npm run deploy
+curl -f https://b-social-chat.nicbj96.workers.dev/health
 ```
 
-Then push to GitHub:
+`predeploy` automatically runs the full verification gate. Secrets are Cloudflare Worker secrets and must never appear in source, docs, shell output, or commits.
 
-```bash
-git push https://REDACTED_GITHUB_PAT@github.com/bbssocialnico-bit/b-social-chat-worker.git main
-```
-
-## Companion repo
-
-Frontend: [bbssocialnico-bit/b-social-pages](https://github.com/bbssocialnico-bit/b-social-pages)
-
-## Reference
-
-See `CLAUDE.md` in this repo for full developer/AI session reference.
+See `CLAUDE.md` for architecture, safety rules, and the complete production workflow.

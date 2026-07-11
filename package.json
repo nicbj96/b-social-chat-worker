@@ -4,17 +4,22 @@
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
+    "predeploy": "npm run verify:local",
     "deploy": "wrangler deploy",
-    "test": "vitest run"
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "audit:prod": "npm audit --omit=dev --audit-level=moderate",
+    "assert:repo-safety": "node script/assert-repo-safety.mjs",
+    "verify:local": "npm run check && npm test && npm run audit:prod && npm run assert:repo-safety"
   },
   "dependencies": {
     "@sentry/cloudflare": "^10.52.0",
     "@supabase/supabase-js": "^2.45.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240909.0",
+    "@cloudflare/workers-types": "^4.20260611.1",
     "typescript": "^5.5.0",
     "vitest": "^4.1.9",
-    "wrangler": "^3.78.0"
+    "wrangler": "^4.100.0"
   }
 }
