@@ -29,7 +29,7 @@ const CATEGORY_RULES = [
 export function inferDiscoveryIntent(message: string, contextCity?: string): DiscoveryIntent {
   const text = String(message || "").trim();
   const placeSignal = /(sted|steder|park|skov|museum|restaurant|café|cafe)\w*/iu.test(text);
-  const eventSignal = /\b(event|events|koncert|festival|jazz|aktivitet|aktiviteter|weekend|i aften)\w*/iu.test(text);
+  const eventSignal = /(event|events|koncert|festival|jazz|aktivitet|aktiviteter|weekend|i aften)\w*/iu.test(text);
   const kind: DiscoveryKind = placeSignal && eventSignal ? "both" : placeSignal ? "places" : eventSignal ? "events" : "both";
   const city = KNOWN_CITIES.find((candidate) => text.toLocaleLowerCase("da-DK").includes(candidate.toLocaleLowerCase("da-DK"))) || contextCity?.trim() || undefined;
   const category = CATEGORY_RULES.find((rule) => rule.test.test(text));
@@ -45,9 +45,26 @@ export function inferDiscoveryIntent(message: string, contextCity?: string): Dis
 }
 
 export function formatFallbackReply(intent: DiscoveryIntent, places: PlaceResult[], events: EventResult[]) {
-  const selectedPlaces = places.slice(0, intent.limit).filter((place) => place.id && place.name);
+  const seenPlaces = new Set<string>();
+  const uniquePlaces = places.filter((place) => {
+    if (!place.id || !place.name) return false;
+    const key = `${place.name}|${place.city || ""}`.trim().toLocaleLowerCase("da-DK");
+    if (seenPlaces.has(key)) return false;
+    seenPlaces.add(key);
+    return true;
+  });
+  const seenEvents = new Set<string>();
+  const uniqueEvents = events.filter((event) => {
+    if (!event.id || !event.title) return false;
+    const key = `${event.title}|${event.location || ""}|${event.date || ""}`.trim().toLocaleLowerCase("da-DK");
+    if (seenEvents.has(key)) return false;
+    seenEvents.add(key);
+    return true;
+  });
+  const selectedPlaces = uniquePlaces.slice(0, intent.limit);
   const remaining = Math.max(0, intent.limit - selectedPlaces.length);
-  const selectedEvents = events.slice(0, remaining || intent.limit).filter((event) => event.id && event.title);
+  const eventCapacity = intent.kind === "events" ? intent.limit : remaining;
+  const selectedEvents = uniqueEvents.slice(0, eventCapacity);
   const lines = [
     ...selectedPlaces.map((place) => `• ${place.name} — ${place.city || "by ikke angivet"}`),
     ...selectedEvents.map((event) => `• ${event.title} — ${event.location || "sted ikke angivet"}${event.date ? ` (${event.date})` : ""}`),
@@ -59,7 +76,7 @@ export function formatFallbackReply(intent: DiscoveryIntent, places: PlaceResult
       : `Jeg fandt ingen resultater${intent.city ? ` i ${intent.city}` : ""} med de valgte filtre.`,
     tool_calls_made: ["direct_discovery_fallback"],
     place_ids: selectedPlaces.map((place) => String(place.id)).slice(0, intent.limit),
-    event_ids: selectedEvents.map((event) => String(event.id)).slice(0, Math.max(0, intent.limit - selectedPlaces.length) || intent.limit),
+    event_ids: selectedEvents.map((event) => String(event.id)),
     suggested_tag_slugs: intent.placeCategory ? [intent.placeCategory] : [],
     degraded: true,
   };

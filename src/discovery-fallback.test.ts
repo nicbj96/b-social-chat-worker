@@ -23,7 +23,9 @@ describe("inferDiscoveryIntent", () => {
   });
 
   it("uses context city only when the message names no city", () => {
-    expect(inferDiscoveryIntent("find familieaktiviteter", "Odense").city).toBe("Odense");
+    const intent = inferDiscoveryIntent("find familieaktiviteter", "Odense");
+    expect(intent.city).toBe("Odense");
+    expect(intent.kind).toBe("events");
   });
 });
 
@@ -46,6 +48,19 @@ describe("formatFallbackReply", () => {
     expect(response.reply).toContain("ingen resultater");
     expect(response.place_ids).toEqual([]);
     expect(response.event_ids).toEqual([]);
+  });
+
+  it("deduplicates equivalent venue names before returning IDs", () => {
+    const response = formatFallbackReply(
+      inferDiscoveryIntent("Find familiesteder i Odense"),
+      [
+        { id: "p1", name: "Odense Zoo", city: "Odense Municipality" },
+        { id: "p2", name: "Odense Zoo", city: "Odense Municipality" },
+      ],
+      [],
+    );
+    expect(response.reply.match(/Odense Zoo/g)).toHaveLength(1);
+    expect(response.place_ids).toEqual(["p1"]);
   });
 });
 
