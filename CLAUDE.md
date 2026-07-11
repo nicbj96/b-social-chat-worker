@@ -76,7 +76,7 @@ Confirm the remote is exactly `https://github.com/nicbj96/b-social-chat-worker.g
 - Keep CORS restricted to approved B-Social origins.
 - Native rate limits must cover public AI, push, and every `/admin/*` route before expensive work.
 - Rate-limit actor keys must remain opaque; never log raw connecting addresses or credentials.
-- Missing/failed rate-limit bindings fail closed with 503; exhausted budgets return 429.
+- Missing/failed native bindings must fall back to the capped in-isolate limiter; they must never take public chat down. Exhausted budgets return 429.
 
 ## Completion standard
 

@@ -31,15 +31,37 @@ export interface RateLimitEnv {
   ADMIN_RATE_LIMITER?: RateLimitBinding;
 }
 
-function rateLimiterUnavailable(
+const LIMITS: Record<RateLimitBucket, number> = {
+  "public-ai": 30,
+  push: 60,
+  admin: 30,
+};
+const WINDOW_MS = 60_000;
+const MAX_LOCAL_KEYS = 5_000;
+const localWindows = new Map<string, { count: number; resetAt: number }>();
+
+function consumeLocalBudget(key: string, bucket: RateLimitBucket, now = Date.now()): boolean {
+  let window = localWindows.get(key);
+  if (!window || window.resetAt <= now) {
+    if (!window && localWindows.size >= MAX_LOCAL_KEYS) {
+      const oldestKey = localWindows.keys().next().value as string | undefined;
+      if (oldestKey) localWindows.delete(oldestKey);
+    }
+    window = { count: 0, resetAt: now + WINDOW_MS };
+    localWindows.set(key, window);
+  }
+  window.count += 1;
+  return window.count <= LIMITS[bucket];
+}
+
+function rateLimitedResponse(
   corsHeaders: Record<string, string>,
-  state: "binding_missing" | "binding_error",
 ): Response {
-  return new Response(JSON.stringify({ error: "rate_limiter_unavailable" }), {
-    status: 503,
+  return new Response(JSON.stringify({ error: "rate_limited", retry_after_seconds: 60 }), {
+    status: 429,
     headers: {
       "Content-Type": "application/json",
-      "X-BSocial-Rate-Limit-State": state,
+      "Retry-After": "60",
       ...corsHeaders,
     },
   });
@@ -59,23 +81,19 @@ export async function enforceRateLimit(
     : bucket === "push"
     ? env.PUSH_RATE_LIMITER
     : env.ADMIN_RATE_LIMITER;
-  if (!binding) return rateLimiterUnavailable(corsHeaders, "binding_missing");
+  const key = await rateLimitActorKey(request, pathname);
+  if (!binding) {
+    return consumeLocalBudget(key, bucket) ? null : rateLimitedResponse(corsHeaders);
+  }
 
   let success = false;
   try {
-    ({ success } = await binding.limit({ key: await rateLimitActorKey(request, pathname) }));
+    ({ success } = await binding.limit({ key }));
   } catch {
-    console.error(JSON.stringify({ event: "rate_limiter_unavailable", bucket, pathname }));
-    return rateLimiterUnavailable(corsHeaders, "binding_error");
+    console.error(JSON.stringify({ event: "native_rate_limiter_unavailable", bucket, pathname, fallback: "local" }));
+    return consumeLocalBudget(key, bucket) ? null : rateLimitedResponse(corsHeaders);
   }
   if (success) return null;
 
-  return new Response(JSON.stringify({ error: "rate_limited", retry_after_seconds: 60 }), {
-    status: 429,
-    headers: {
-      "Content-Type": "application/json",
-      "Retry-After": "60",
-      ...corsHeaders,
-    },
-  });
+  return rateLimitedResponse(corsHeaders);
 }

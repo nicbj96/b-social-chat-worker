@@ -71,20 +71,19 @@ describe("enforceRateLimit", () => {
     expect(seenKeys[0]).toMatch(/^v1:[a-f0-9]{64}$/);
   });
 
-  it("fails closed when the configured route binding is missing", async () => {
+  it("falls back to an in-isolate budget when the binding is missing", async () => {
     const request = new Request("https://worker.example/chat", {
       method: "POST",
-      headers: { "CF-Connecting-IP": "203.0.113.7" },
+      headers: { "CF-Connecting-IP": "203.0.113.70" },
     });
 
-    const response = await enforceRateLimit(request, {}, "/chat", {});
-
-    expect(response?.status).toBe(503);
-    expect(response?.headers.get("X-BSocial-Rate-Limit-State")).toBe("binding_missing");
-    expect(await response?.json()).toEqual({ error: "rate_limiter_unavailable" });
+    for (let index = 0; index < 30; index += 1) {
+      expect(await enforceRateLimit(request, {}, "/chat", {})).toBeNull();
+    }
+    expect((await enforceRateLimit(request, {}, "/chat", {}))?.status).toBe(429);
   });
 
-  it("fails closed when the native binding throws", async () => {
+  it("falls back locally when the native binding throws", async () => {
     const env = {
       PUBLIC_AI_RATE_LIMITER: {
         limit: async () => {
@@ -94,13 +93,11 @@ describe("enforceRateLimit", () => {
     };
     const request = new Request("https://worker.example/search", {
       method: "POST",
-      headers: { "CF-Connecting-IP": "203.0.113.7" },
+      headers: { "CF-Connecting-IP": "203.0.113.71" },
     });
 
     const response = await enforceRateLimit(request, env, "/search", {});
 
-    expect(response?.status).toBe(503);
-    expect(response?.headers.get("X-BSocial-Rate-Limit-State")).toBe("binding_error");
-    expect(await response?.json()).toEqual({ error: "rate_limiter_unavailable" });
+    expect(response).toBeNull();
   });
 });

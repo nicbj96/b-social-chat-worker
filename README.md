@@ -26,7 +26,7 @@ Cloudflare Rate Limiting bindings run before request parsing, authentication wor
 - Push (`/push/send`, `/push/broadcast`): 60 requests/minute
 - Founder admin (`/admin/*`): 30 requests/minute
 
-Raw connecting addresses are SHA-256 hashed before use as keys. A missing or failed binding returns 503; an exhausted budget returns 429 with `Retry-After`.
+Raw connecting addresses are SHA-256 hashed before use as keys. If Cloudflare omits or fails a native binding, the Worker uses a capped in-isolate fallback budget instead of taking the route down. An exhausted budget returns 429 with `Retry-After`.
 
 ## Local verification
 
