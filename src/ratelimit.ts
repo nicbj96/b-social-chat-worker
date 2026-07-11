@@ -31,10 +31,17 @@ export interface RateLimitEnv {
   ADMIN_RATE_LIMITER?: RateLimitBinding;
 }
 
-function rateLimiterUnavailable(corsHeaders: Record<string, string>): Response {
+function rateLimiterUnavailable(
+  corsHeaders: Record<string, string>,
+  state: "binding_missing" | "binding_error",
+): Response {
   return new Response(JSON.stringify({ error: "rate_limiter_unavailable" }), {
     status: 503,
-    headers: { "Content-Type": "application/json", ...corsHeaders },
+    headers: {
+      "Content-Type": "application/json",
+      "X-BSocial-Rate-Limit-State": state,
+      ...corsHeaders,
+    },
   });
 }
 
@@ -52,14 +59,14 @@ export async function enforceRateLimit(
     : bucket === "push"
     ? env.PUSH_RATE_LIMITER
     : env.ADMIN_RATE_LIMITER;
-  if (!binding) return rateLimiterUnavailable(corsHeaders);
+  if (!binding) return rateLimiterUnavailable(corsHeaders, "binding_missing");
 
   let success = false;
   try {
     ({ success } = await binding.limit({ key: await rateLimitActorKey(request, pathname) }));
   } catch {
     console.error(JSON.stringify({ event: "rate_limiter_unavailable", bucket, pathname }));
-    return rateLimiterUnavailable(corsHeaders);
+    return rateLimiterUnavailable(corsHeaders, "binding_error");
   }
   if (success) return null;
 

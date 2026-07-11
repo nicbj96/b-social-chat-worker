@@ -80,6 +80,7 @@ describe("enforceRateLimit", () => {
     const response = await enforceRateLimit(request, {}, "/chat", {});
 
     expect(response?.status).toBe(503);
+    expect(response?.headers.get("X-BSocial-Rate-Limit-State")).toBe("binding_missing");
     expect(await response?.json()).toEqual({ error: "rate_limiter_unavailable" });
   });
 
@@ -99,6 +100,7 @@ describe("enforceRateLimit", () => {
     const response = await enforceRateLimit(request, env, "/search", {});
 
     expect(response?.status).toBe(503);
+    expect(response?.headers.get("X-BSocial-Rate-Limit-State")).toBe("binding_error");
     expect(await response?.json()).toEqual({ error: "rate_limiter_unavailable" });
   });
 });
