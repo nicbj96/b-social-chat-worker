@@ -26,6 +26,10 @@ export async function searchEvents(
     query = query.eq("indoor_outdoor", args.indoor_outdoor);
   }
 
+  if (args.city) {
+    query = query.ilike("location", `%${args.city}%`);
+  }
+
   if (args.mode) {
     query = query.contains("suitable_for_modes", [args.mode]);
   }

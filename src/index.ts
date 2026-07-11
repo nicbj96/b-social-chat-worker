@@ -11,6 +11,7 @@ import { sendWebPush, type PushMessage } from "./webpush";
 import { isSafeEntityId, isValidUuid, clampString, clampNumber } from "./validate";
 import { guardedFetch } from "./fetchguard";
 import { enforceRateLimit, type RateLimitEnv } from "./ratelimit";
+import { formatFallbackReply, inferDiscoveryIntent, isAiQuotaError } from "./discovery-fallback";
 
 export { RateLimitDurableObject } from "./rate-limit-do";
 
@@ -834,6 +835,37 @@ const MAX_MESSAGES = 30;        // keep only the last N turns
 const MAX_MESSAGE_CHARS = 4000; // per-message content cap
 const MAX_BODY_BYTES = 256 * 1024; // reject trivially-huge bodies early (256KB)
 
+async function directDiscoveryFallback(
+  env: Env,
+  userMessages: ChatMessage[],
+  context: { user_prefs?: { city?: string } },
+): Promise<Response> {
+  const intent = inferDiscoveryIntent(latestUserMessage(userMessages), context.user_prefs?.city);
+  const supabase = createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY);
+  let places: any[] = [];
+  let events: any[] = [];
+
+  if (intent.kind === "places" || intent.kind === "both") {
+    const result = await searchPlaces(supabase, {
+      city: intent.city,
+      category: intent.placeCategory,
+    });
+    places = result.results || [];
+  }
+
+  if (intent.kind === "events" || intent.kind === "both") {
+    const useSpecificTag = intent.queryTag && intent.queryTag !== intent.eventCategory;
+    const result = await searchEvents(supabase, {
+      city: intent.city,
+      category: useSpecificTag ? undefined : intent.eventCategory,
+      tags: useSpecificTag ? intent.queryTag : undefined,
+    });
+    events = result.results || [];
+  }
+
+  return jsonResponse(formatFallbackReply(intent, places, events));
+}
+
 async function handleChat(request: Request, env: Env, executionCtx: ExecutionContext): Promise<Response> {
   try {
     // S4 — reject obviously-oversized bodies before parsing/work.
@@ -992,11 +1024,17 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
     ];
 
     // First AI call — may include tool calls
-    const aiResponse = await env.AI.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
-      messages,
-      tools: TOOLS,
-      tool_choice: "auto",
-    });
+    let aiResponse: any;
+    try {
+      aiResponse = await env.AI.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
+        messages,
+        tools: TOOLS,
+        tool_choice: "auto",
+      });
+    } catch (error) {
+      if (isAiQuotaError(error)) return directDiscoveryFallback(env, userMessages, ctx);
+      throw error;
+    }
 
     // If the model wants to call tools, execute them
     if (aiResponse.tool_calls && aiResponse.tool_calls.length > 0) {
@@ -1238,9 +1276,15 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       }
 
       // Second AI call — now with data from Supabase
-      const finalResponse = await env.AI.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
-        messages,
-      });
+      let finalResponse: any;
+      try {
+        finalResponse = await env.AI.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
+          messages,
+        });
+      } catch (error) {
+        if (isAiQuotaError(error)) return directDiscoveryFallback(env, userMessages, ctx);
+        throw error;
+      }
 
       // Collect tag slugs from tool arguments (for live filter update on frontend)
       const collectedTagSlugs: string[] = [];

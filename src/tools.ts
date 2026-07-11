@@ -58,6 +58,10 @@ export const TOOLS = [
             enum: ["indoor", "outdoor"],
             description: "Om brugeren foretrækker indendørs eller udendørs",
           },
+          city: {
+            type: "string",
+            description: "Bynavn at filtrere eventets location på, f.eks. 'Aarhus'",
+          },
         },
       },
     },
@@ -239,6 +243,7 @@ export type ToolCallArgs = {
     tags?: string;
     mode?: string;
     indoor_outdoor?: string;
+    city?: string;
   };
   search_routes: {
     activity_type?: string;
