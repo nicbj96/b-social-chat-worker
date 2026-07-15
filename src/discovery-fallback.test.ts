@@ -133,17 +133,28 @@ describe("isAiQuotaError", () => {
 
 describe("repairContradictoryGroundedReply", () => {
   it("rewrites empty-claim prose when structured event rows exist", () => {
-    const reply = "Jeg kunne desværre ikke finde nogle koncerter i København denne uge.";
-    expect(claimsEmptyDiscovery(reply)).toBe(true);
-    const fixed = repairContradictoryGroundedReply(
-      reply,
-      [],
-      [{ id: "e1", title: "Jazz på Blågårds Plads", location: "København", date: "2026-07-18" }],
-      "da",
-    );
-    expect(fixed).toContain("Jazz på Blågårds Plads");
-    expect(fixed).not.toMatch(/desværre ikke finde/i);
-  });
+      const reply = "Jeg kunne desværre ikke finde nogle koncerter i København denne uge.";
+      expect(claimsEmptyDiscovery(reply)).toBe(true);
+      const fixed = repairContradictoryGroundedReply(
+        reply,
+        [],
+        [{ id: "e1", title: "Jazz på Blågårds Plads", location: "København", date: "2026-07-18" }],
+        "da",
+      );
+      expect(fixed).toContain("Jazz på Blågårds Plads");
+      expect(fixed).not.toMatch(/desværre ikke finde/i);
+    });
+
+    it("rewrites 'fandt ingen jazz-events' / 'fandt ikke' empty claims", () => {
+      expect(claimsEmptyDiscovery("Jeg fandt ikke nogle jazz-events i København lige nu.")).toBe(true);
+      const fixed = repairContradictoryGroundedReply(
+        "Jeg fandt ingen jazz-events i København (KBH).",
+        [],
+        [{ id: "e1", title: "Jazz Night", location: "København" }],
+        "da",
+      );
+      expect(fixed).toContain("Jazz Night");
+    });
 
   it("leaves honest replies alone when tools found nothing", () => {
     const reply = "Jeg fandt ingen events i aften.";

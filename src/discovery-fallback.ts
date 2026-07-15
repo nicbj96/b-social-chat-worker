@@ -150,7 +150,7 @@ export function isAiQuotaError(error: unknown): boolean {
 
 /** Model claimed empty while tools returned rows — prose must not contradict IDs. */
 const EMPTY_CLAIM_RE =
-  /\b(ingen (resultater|events?|koncerter|steder)|could(?:\s*not|n't) find|no (results?|events?|concerts?|places?)|desværre ikke finde|kunne desværre ikke)\b/iu;
+  /\b(ingen.{0,40}(resultater|events?|koncerter|steder)|fandt (ikke|ingen)|could(?:\s*not|n't) find|no (results?|events?|concerts?|places?)|desværre ikke finde|kunne desværre ikke)\b/iu;
 
 export function claimsEmptyDiscovery(reply: string): boolean {
   return EMPTY_CLAIM_RE.test(String(reply || ""));
