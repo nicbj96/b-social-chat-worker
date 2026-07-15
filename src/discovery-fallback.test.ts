@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { formatFallbackReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError } from "./discovery-fallback";
+import {
+  claimsEmptyDiscovery,
+  formatFallbackReply,
+  inferDiscoveryIntent,
+  inferResponseLanguage,
+  isAiQuotaError,
+  repairContradictoryGroundedReply,
+} from "./discovery-fallback";
 
 describe("inferResponseLanguage", () => {
   it("recognizes English discovery requests and defaults ambiguous text to Danish", () => {
@@ -101,5 +108,37 @@ describe("isAiQuotaError", () => {
   it("recognizes Cloudflare Workers AI allocation exhaustion", () => {
     expect(isAiQuotaError(new Error("4006: used up your daily free allocation of 10,000 neurons"))).toBe(true);
     expect(isAiQuotaError(new Error("ordinary upstream failure"))).toBe(false);
+  });
+});
+
+describe("repairContradictoryGroundedReply", () => {
+  it("rewrites empty-claim prose when structured event rows exist", () => {
+    const reply = "Jeg kunne desværre ikke finde nogle koncerter i København denne uge.";
+    expect(claimsEmptyDiscovery(reply)).toBe(true);
+    const fixed = repairContradictoryGroundedReply(
+      reply,
+      [],
+      [{ id: "e1", title: "Jazz på Blågårds Plads", location: "København", date: "2026-07-18" }],
+      "da",
+    );
+    expect(fixed).toContain("Jazz på Blågårds Plads");
+    expect(fixed).not.toMatch(/desværre ikke finde/i);
+  });
+
+  it("leaves honest replies alone when tools found nothing", () => {
+    const reply = "Jeg fandt ingen events i aften.";
+    expect(repairContradictoryGroundedReply(reply, [], [], "da")).toBe(reply);
+  });
+
+  it("leaves grounded non-empty replies alone", () => {
+    const reply = "Her er Jazz på Blågårds Plads i aften.";
+    expect(
+      repairContradictoryGroundedReply(
+        reply,
+        [],
+        [{ id: "e1", title: "Jazz på Blågårds Plads", location: "København" }],
+        "da",
+      ),
+    ).toBe(reply);
   });
 });

@@ -116,3 +116,28 @@ export function isAiQuotaError(error: unknown): boolean {
   const message = String((error as { message?: string })?.message || error || "");
   return /4006|daily free allocation|used up.*neurons/i.test(message);
 }
+
+/** Model claimed empty while tools returned rows — prose must not contradict IDs. */
+const EMPTY_CLAIM_RE =
+  /\b(ingen (resultater|events?|koncerter|steder)|could(?:\s*not|n't) find|no (results?|events?|concerts?|places?)|desværre ikke finde|kunne desværre ikke)\b/iu;
+
+export function claimsEmptyDiscovery(reply: string): boolean {
+  return EMPTY_CLAIM_RE.test(String(reply || ""));
+}
+
+export function repairContradictoryGroundedReply(
+  reply: string,
+  places: PlaceResult[],
+  events: EventResult[],
+  language: ResponseLanguage = "da",
+): string {
+  const hasRows = places.some((p) => p.id) || events.some((e) => e.id);
+  if (!hasRows) return reply;
+  if (String(reply || "").trim() && !claimsEmptyDiscovery(reply)) return reply;
+  return formatFallbackReply(
+    { kind: "both", limit: Math.min(8, Math.max(places.length + events.length, 1)) },
+    places,
+    events,
+    language,
+  ).reply;
+}

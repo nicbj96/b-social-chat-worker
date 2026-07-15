@@ -11,7 +11,7 @@ import { sendWebPush, type PushMessage } from "./webpush";
 import { isSafeEntityId, isValidUuid, clampString, clampNumber } from "./validate";
 import { guardedFetch } from "./fetchguard";
 import { enforceRateLimit, type RateLimitEnv } from "./ratelimit";
-import { formatFallbackReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError } from "./discovery-fallback";
+import { formatFallbackReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, repairContradictoryGroundedReply } from "./discovery-fallback";
 
 export { RateLimitDurableObject } from "./rate-limit-do";
 
@@ -1075,63 +1075,81 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       });
 
       // Execute each tool call; collect place/event IDs for structured response
-      const collectedPlaceIds: string[] = [];
-      const collectedEventIds: string[] = [];
+            const collectedPlaceIds: string[] = [];
+            const collectedEventIds: string[] = [];
+            const collectedPlaces: { id?: string; name?: string; city?: string }[] = [];
+            const collectedEvents: { id?: string; title?: string; location?: string; date?: string }[] = [];
 
-      for (const toolCall of aiResponse.tool_calls) {
-        const fnName = toolCall.function.name;
-        const fnArgs =
-          typeof toolCall.function.arguments === "string"
-            ? JSON.parse(toolCall.function.arguments)
-            : toolCall.function.arguments;
+            for (const toolCall of aiResponse.tool_calls) {
+              const fnName = toolCall.function.name;
+              const fnArgs =
+                typeof toolCall.function.arguments === "string"
+                  ? JSON.parse(toolCall.function.arguments)
+                  : toolCall.function.arguments;
 
-        let result: any;
+              let result: any;
 
-        switch (fnName) {
-          case "semantic_search": {
-            // Use our deployed /search flow internally
-            try {
-              const emb: any = await env.AI.run("@cf/baai/bge-m3", { text: [fnArgs.query] });
-              const vec = emb?.data?.[0];
-              if (!vec) { result = { error: "embedding failed" }; break; }
-              const sbHeaders = { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}`, "Content-Type": "application/json" };
-              const kind = fnArgs.kind ?? "both";
-              const out: any = { events: [], places: [] };
-              if (kind === "events" || kind === "both") {
-                const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_events`, {
-                  method: "POST", headers: sbHeaders,
-                  body: JSON.stringify({ query_embedding: vec, match_count: 8, match_threshold: 0.3, filter_country: fnArgs.country ?? null }),
-                });
-                out.events = await r.json();
-                (out.events || []).forEach((e: any) => e.id && collectedEventIds.push(e.id));
-              }
-              if (kind === "places" || kind === "both") {
-                const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_places`, {
-                  method: "POST", headers: sbHeaders,
-                  body: JSON.stringify({ query_embedding: vec, match_count: 8, match_threshold: 0.3, filter_country: fnArgs.country ?? null }),
-                });
-                out.places = await r.json();
-                (out.places || []).forEach((p: any) => p.id && collectedPlaceIds.push(p.id));
-              }
-              result = out;
-            } catch (e: any) { result = { error: String(e.message || e) }; }
-            break;
-          }
-          case "search_events":
-            result = await searchEvents(supabase, fnArgs);
-            if (result.results) {
-              result.results.forEach((e: any) => e.id && collectedEventIds.push(e.id));
-            }
-            break;
-          case "search_routes":
-            result = await searchRoutes(supabase, fnArgs);
-            break;
-          case "search_places":
-            result = await searchPlaces(supabase, fnArgs);
-            if (result.results) {
-              result.results.forEach((p: any) => p.id && collectedPlaceIds.push(p.id));
-            }
-            break;
+              switch (fnName) {
+                case "semantic_search": {
+                  // Use our deployed /search flow internally
+                  try {
+                    const emb: any = await env.AI.run("@cf/baai/bge-m3", { text: [fnArgs.query] });
+                    const vec = emb?.data?.[0];
+                    if (!vec) { result = { error: "embedding failed" }; break; }
+                    const sbHeaders = { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}`, "Content-Type": "application/json" };
+                    const kind = fnArgs.kind ?? "both";
+                    const out: any = { events: [], places: [] };
+                    if (kind === "events" || kind === "both") {
+                      const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_events`, {
+                        method: "POST", headers: sbHeaders,
+                        body: JSON.stringify({ query_embedding: vec, match_count: 8, match_threshold: 0.3, filter_country: fnArgs.country ?? null }),
+                      });
+                      out.events = await r.json();
+                      (out.events || []).forEach((e: any) => {
+                        if (!e?.id) return;
+                        collectedEventIds.push(e.id);
+                        collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date });
+                      });
+                    }
+                    if (kind === "places" || kind === "both") {
+                      const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_places`, {
+                        method: "POST", headers: sbHeaders,
+                        body: JSON.stringify({ query_embedding: vec, match_count: 8, match_threshold: 0.3, filter_country: fnArgs.country ?? null }),
+                      });
+                      out.places = await r.json();
+                      (out.places || []).forEach((p: any) => {
+                        if (!p?.id) return;
+                        collectedPlaceIds.push(p.id);
+                        collectedPlaces.push({ id: p.id, name: p.name, city: p.city });
+                      });
+                    }
+                    result = out;
+                  } catch (e: any) { result = { error: String(e.message || e) }; }
+                  break;
+                }
+                case "search_events":
+                  result = await searchEvents(supabase, fnArgs);
+                  if (result.results) {
+                    result.results.forEach((e: any) => {
+                      if (!e?.id) return;
+                      collectedEventIds.push(e.id);
+                      collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date });
+                    });
+                  }
+                  break;
+                case "search_routes":
+                  result = await searchRoutes(supabase, fnArgs);
+                  break;
+                case "search_places":
+                  result = await searchPlaces(supabase, fnArgs);
+                  if (result.results) {
+                    result.results.forEach((p: any) => {
+                      if (!p?.id) return;
+                      collectedPlaceIds.push(p.id);
+                      collectedPlaces.push({ id: p.id, name: p.name, city: p.city });
+                    });
+                  }
+                  break;
 
           // ── Write tools (JWT-baseret, RLS-sikrede) ──────────────────────
           case "save_user_tags": {
@@ -1331,13 +1349,18 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       }
 
       return jsonResponse({
-        reply: finalResponse.response || finalResponse.content || "",
-        tool_calls_made: aiResponse.tool_calls.map((tc: any) => tc.function.name),
-        place_ids: collectedPlaceIds,
-        event_ids: collectedEventIds,
-        suggested_tag_slugs: [...new Set(collectedTagSlugs)],
-      });
-    }
+              reply: repairContradictoryGroundedReply(
+                finalResponse.response || finalResponse.content || "",
+                collectedPlaces,
+                collectedEvents,
+                inferResponseLanguage(userMessages.map((m) => m.content).join(" ")),
+              ),
+              tool_calls_made: aiResponse.tool_calls.map((tc: any) => tc.function.name),
+              place_ids: collectedPlaceIds,
+              event_ids: collectedEventIds,
+              suggested_tag_slugs: [...new Set(collectedTagSlugs)],
+            });
+          }
 
     // No tool calls — direct response
     return jsonResponse({
