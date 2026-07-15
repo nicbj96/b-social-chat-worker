@@ -11,7 +11,7 @@ import { sendWebPush, type PushMessage } from "./webpush";
 import { isSafeEntityId, isValidUuid, clampString, clampNumber } from "./validate";
 import { guardedFetch } from "./fetchguard";
 import { enforceRateLimit, type RateLimitEnv } from "./ratelimit";
-import { formatFallbackReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, repairContradictoryGroundedReply } from "./discovery-fallback";
+import { formatFallbackReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, repairContradictoryGroundedReply } from "./discovery-fallback";
 
 export { RateLimitDurableObject } from "./rate-limit-do";
 
@@ -1362,7 +1362,15 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
             });
           }
 
-    // No tool calls — direct response
+    // No tool calls — never invent discovery results. Fall back to direct DB search.
+    const latest = latestUserMessage(userMessages);
+    if (
+      isDiscoverySeekingMessage(latest) ||
+      looksUngroundedDiscoveryReply(aiResponse.response || aiResponse.content || "")
+    ) {
+      return await directDiscoveryFallback(env, userMessages, ctx);
+    }
+
     return jsonResponse({
       reply: aiResponse.response || aiResponse.content || "",
       tool_calls_made: [],

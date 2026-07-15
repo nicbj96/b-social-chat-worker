@@ -36,10 +36,18 @@ const CATEGORY_RULES = [
 
 export function inferDiscoveryIntent(message: string, contextCity?: string): DiscoveryIntent {
   const text = String(message || "").trim();
+  const lower = text.toLocaleLowerCase("da-DK");
   const placeSignal = /(sted|steder|park|skov|museum|restaurant|café|cafe)\w*/iu.test(text);
   const eventSignal = /(event|events|koncert|festival|jazz|aktivitet|aktiviteter|weekend|i aften)\w*/iu.test(text);
   const kind: DiscoveryKind = placeSignal && eventSignal ? "both" : placeSignal ? "places" : eventSignal ? "events" : "both";
-  const city = KNOWN_CITIES.find((candidate) => text.toLocaleLowerCase("da-DK").includes(candidate.toLocaleLowerCase("da-DK"))) || contextCity?.trim() || undefined;
+
+  // City aliases for DB search (KBH/Cph → København). Keep full Copenhagen match as København.
+  let city: string | undefined;
+  if (/\b(kbh|cph|copenhagen)\b/iu.test(text)) city = "København";
+  else {
+    city = KNOWN_CITIES.find((candidate) => lower.includes(candidate.toLocaleLowerCase("da-DK"))) || contextCity?.trim() || undefined;
+  }
+
   const category = CATEGORY_RULES.find((rule) => rule.test.test(text));
   const requested = Number(text.match(/\b([1-8])\b/u)?.[1] || 4);
 
@@ -50,6 +58,29 @@ export function inferDiscoveryIntent(message: string, contextCity?: string): Dis
     intent.queryTag = category.test.test(text) && /jazz/iu.test(text) ? "jazz" : category.tag;
   }
   return intent;
+}
+
+/** True when the user is asking us to look up places/events in the DB. */
+export function isDiscoverySeekingMessage(message: string): boolean {
+  const text = String(message || "").trim();
+  if (!text) return false;
+  const hasVerb = /\b(find|vis|søg|anbefal|show|recommend|search|looking for|hvad sker|hvad kan)\b/iu.test(text);
+  const hasNoun = /\b(event|events|sted|steder|koncert|festival|jazz|aktivitet|aktiviteter|museum|restaurant|café|cafe|park|skov)\w*\b/iu.test(text);
+  const hasCity = /\b(kbh|cph|københavn|copenhagen|aarhus|århus|aalborg|ålborg|odense|malmö|malmo|frederikshavn)\b/iu.test(text);
+  return (hasVerb && (hasNoun || hasCity)) || (hasNoun && hasCity);
+}
+
+/** Placeholder / invented discovery prose without tool grounding. */
+export function looksUngroundedDiscoveryReply(reply: string): boolean {
+  const text = String(reply || "");
+  if (!text.trim()) return false;
+  if (/\(\s*search result\s*\)/i.test(text)) return true;
+  if (/\b(placeholder|lorem ipsum|TODO|\[result\])\b/i.test(text)) return true;
+  // Claims to have found things with no concrete place/event bullet lines.
+  const claimsFound = /\b(her er (hvad|nogle|resultater)|found (some|these)|jeg fandt)\b/iu.test(text);
+  const hasConcreteBullet = /[•\-\*]\s+\S+/.test(text) || /\d+\.\s+\S+/.test(text);
+  if (claimsFound && !hasConcreteBullet) return true;
+  return false;
 }
 
 export function formatFallbackReply(

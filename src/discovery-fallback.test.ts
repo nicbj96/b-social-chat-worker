@@ -5,6 +5,8 @@ import {
   inferDiscoveryIntent,
   inferResponseLanguage,
   isAiQuotaError,
+  isDiscoverySeekingMessage,
+  looksUngroundedDiscoveryReply,
   repairContradictoryGroundedReply,
 } from "./discovery-fallback";
 
@@ -100,7 +102,25 @@ describe("formatFallbackReply", () => {
       [],
       "en",
     );
-    expect(response.reply).toBe("I found no results in Copenhagen with the selected filters.");
+    expect(response.reply).toBe("I found no results in København with the selected filters.");
+  });
+});
+
+describe("isDiscoverySeekingMessage / ungrounded replies", () => {
+  it("detects discovery asks including KBH aliases", () => {
+    expect(isDiscoverySeekingMessage("Find jazz i København")).toBe(true);
+    expect(isDiscoverySeekingMessage("Find jazz i KBH")).toBe(true);
+    expect(isDiscoverySeekingMessage("hej")).toBe(false);
+  });
+
+  it("flags invented placeholder discovery prose", () => {
+    expect(looksUngroundedDiscoveryReply("Her er hvad jeg fandt:\n(search result)")).toBe(true);
+    expect(looksUngroundedDiscoveryReply("Her er resultater direkte fra B-Social:\n• Real Event — CPH")).toBe(false);
+  });
+
+  it("maps KBH/Cph to København for discovery intent", () => {
+    expect(inferDiscoveryIntent("Find jazz i KBH").city).toBe("København");
+    expect(inferDiscoveryIntent("events in Cph").city).toBe("København");
   });
 });
 
