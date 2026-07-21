@@ -105,7 +105,7 @@ export const TOOLS = [
           category: {
             type: "string",
             description:
-              "Overordnet kategori: natur, aktiv_sport, mad_hangout",
+              "Overordnet kategori (rigtige slugs): natur-outdoor, mad-drikke, kultur-kunst, motion-fitness, musik-lyd, børn-familie, rejser-eventyr, sundhed-wellness, social-hobby",
           },
           tags: {
             type: "string",

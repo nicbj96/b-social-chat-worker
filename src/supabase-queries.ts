@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import type { ToolCallArgs } from "./tools";
+import { normalizeCategory } from "./category-vocabulary";
 
 // Create a Supabase client from env vars
 export function createSupabaseClient(url: string, key: string): SupabaseClient {
@@ -18,8 +19,13 @@ export async function searchEvents(
     .order("date", { ascending: true })
     .limit(8);
 
-  if (args.category) {
-    query = query.eq("category", args.category);
+  // The model routinely emits a category word from outside the real taxonomy
+  // ("musik", "concert", the worker's own legacy "mad_hangout"). Normalising
+  // first turns those into real slugs; an unmappable word yields null and we
+  // simply do not filter, because a broader answer beats an empty one.
+  const eventCategory = normalizeCategory(args.category);
+  if (eventCategory) {
+    query = query.eq("category", eventCategory);
   }
 
   if (args.indoor_outdoor) {
@@ -121,8 +127,9 @@ export async function searchPlaces(
     query = query.ilike("city", `%${args.city}%`);
   }
 
-  if (args.category) {
-    query = query.contains("main_categories", [args.category]);
+  const placeCategory = normalizeCategory(args.category);
+  if (placeCategory) {
+    query = query.contains("main_categories", [placeCategory]);
   }
 
   if (args.tags) {
