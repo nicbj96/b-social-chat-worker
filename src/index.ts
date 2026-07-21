@@ -1,4 +1,5 @@
 import * as Sentry from "@sentry/cloudflare";
+import { cityToBBox } from "./city-bbox";
 import { SYSTEM_PROMPT } from "./system-prompt";
 import { TOOLS } from "./tools";
 import {
@@ -1098,11 +1099,18 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                     if (!vec) { result = { error: "embedding failed" }; break; }
                     const sbHeaders = { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}`, "Content-Type": "application/json" };
                     const kind = fnArgs.kind ?? "both";
+                    // Location awareness (2026-07-22): a named city becomes a
+                    // real bounding box on both RPCs. Unknown city → null →
+                    // unfiltered, never an empty answer.
+                    const bbox = cityToBBox(fnArgs.city);
+                    const bboxParams = bbox
+                      ? { filter_bbox_n: bbox.n, filter_bbox_s: bbox.s, filter_bbox_e: bbox.e, filter_bbox_w: bbox.w }
+                      : {};
                     const out: any = { events: [], places: [] };
                     if (kind === "events" || kind === "both") {
                       const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_events`, {
                         method: "POST", headers: sbHeaders,
-                        body: JSON.stringify({ query_embedding: vec, match_count: 8, match_threshold: 0.3, filter_country: fnArgs.country ?? null }),
+                        body: JSON.stringify({ query_embedding: vec, match_count: 8, match_threshold: 0.3, filter_country: fnArgs.country ?? bbox?.country ?? null, ...bboxParams }),
                       });
                       out.events = await r.json();
                       (out.events || []).forEach((e: any) => {
@@ -1114,7 +1122,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                     if (kind === "places" || kind === "both") {
                       const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_places`, {
                         method: "POST", headers: sbHeaders,
-                        body: JSON.stringify({ query_embedding: vec, match_count: 8, match_threshold: 0.3, filter_country: fnArgs.country ?? null }),
+                        body: JSON.stringify({ query_embedding: vec, match_count: 8, match_threshold: 0.3, filter_country: fnArgs.country ?? bbox?.country ?? null, ...bboxParams }),
                       });
                       out.places = await r.json();
                       (out.places || []).forEach((p: any) => {

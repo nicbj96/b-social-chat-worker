@@ -24,6 +24,11 @@ export const TOOLS = [
             type: "string",
             description: "Land-filter, fx 'DK', 'SE', 'NO' — kun hvis brugeren nævner et land",
           },
+          city: {
+            type: "string",
+            description:
+              "By brugeren er i eller spørger om, fx 'Aalborg', 'København', 'Aarhus'. Sæt ALTID denne når brugeren nævner hvor de er eller hvor de vil hen — ellers får de resultater fra hele landet.",
+          },
         },
         required: ["query"],
       },
@@ -237,6 +242,7 @@ export type ToolCallArgs = {
     query: string;
     kind?: "events" | "places" | "both";
     country?: string;
+    city?: string;
   };
   search_events: {
     category?: string;
