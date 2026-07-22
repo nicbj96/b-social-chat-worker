@@ -347,3 +347,35 @@ describe("towns that exist must not fall through to a global search", () => {
     });
   }
 });
+
+describe("a substitution is labelled as one", () => {
+  const place = { id: "p1", name: "Thisted Hundeskov", city: "Thisted" };
+
+  it("says it found no events when it shows only places for an event question", () => {
+    const r = formatFallbackReply(
+      { kind: "events", city: "Thisted", limit: 4 },
+      [place], [], "da",
+    );
+    expect(r.reply).toMatch(/ingen events/i);
+    expect(r.reply).not.toMatch(/^Her er resultater/);
+  });
+
+  it("uses the plain intro when it actually found events", () => {
+    const r = formatFallbackReply(
+      { kind: "events", city: "Aarhus", limit: 4 },
+      [], [{ id: "e1", title: "Koncert", location: "Aarhus" }], "da",
+    );
+    expect(r.reply).toMatch(/^Her er resultater/);
+  });
+
+  it("does not label a places question as a substitution", () => {
+    // Asking for places and getting places is not a substitution.
+    const r = formatFallbackReply({ kind: "places", city: "Thisted", limit: 4 }, [place], [], "da");
+    expect(r.reply).toMatch(/^Her er resultater/);
+  });
+
+  it("labels in English too", () => {
+    const r = formatFallbackReply({ kind: "events", city: "Thisted", limit: 4 }, [place], [], "en");
+    expect(r.reply).toMatch(/no events/i);
+  });
+});

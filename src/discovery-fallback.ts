@@ -263,6 +263,9 @@ export function formatFallbackReply(
   const copy = language === "en"
     ? {
         intro: "Here are results directly from B-Social:",
+        // Asked for events, got only places. Saying so is the difference
+        // between an answer and a substitution presented as one.
+        placesInstead: "I found no events for that, but here are places",
         noResults: "I found no results",
         cityMissing: "city not specified",
         nearCity: "near",
@@ -272,6 +275,7 @@ export function formatFallbackReply(
       }
     : {
         intro: "Her er resultater direkte fra B-Social:",
+        placesInstead: "Jeg fandt ingen events til det, men her er steder",
         noResults: "Jeg fandt ingen resultater",
         cityMissing: "by ikke angivet",
         nearCity: "nær",
@@ -294,9 +298,17 @@ export function formatFallbackReply(
     ...selectedEvents.map((event) => `• ${event.title} — ${event.location || copy.locationMissing}${event.date ? ` (${event.date})` : ""}`),
   ].slice(0, intent.limit);
 
+  // The reader asked for EVENTS and we are about to show only PLACES. Calling
+  // that "results directly from B-Social" presents a substitution as an answer:
+  // "quidditch-turneringer i Thisted" came back listing nature spots under that
+  // heading. Same rule as the widened-radius label on the feed — when the answer
+  // is not the thing that was asked for, say so.
+  const substituting =
+    intent.kind === "events" && selectedEvents.length === 0 && selectedPlaces.length > 0;
+
   return {
     reply: lines.length > 0
-      ? `${copy.intro}\n${lines.join("\n")}`
+      ? `${substituting ? `${copy.placesInstead}${intent.city ? ` ${copy.cityPrefix} ${intent.city}` : ""}:` : copy.intro}\n${lines.join("\n")}`
       : `${copy.noResults}${intent.city ? ` ${copy.cityPrefix} ${intent.city}` : ""} ${copy.selectedFilters}`,
     tool_calls_made: ["direct_discovery_fallback"],
     place_ids: selectedPlaces.map((place) => String(place.id)).slice(0, intent.limit),
