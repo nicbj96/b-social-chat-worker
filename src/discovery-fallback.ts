@@ -353,10 +353,36 @@ export function formatFallbackReply(
     seenEvents.add(key);
     return true;
   });
-  const selectedPlaces = uniquePlaces.slice(0, intent.limit);
-  const remaining = Math.max(0, intent.limit - selectedPlaces.length);
-  const eventCapacity = intent.kind === "events" ? intent.limit : remaining;
-  const selectedEvents = uniqueEvents.slice(0, eventCapacity);
+  // A "both" question must come back with BOTH, or it is not an answer.
+  //
+  // Places used to take the whole budget and events got whatever was left,
+  // which for a full page of places is nothing. Live proof 2026-07-22:
+  // "sammenlign koncert vs museumstur i København" returned 4 places and 0
+  // events -- a comparison with one side missing, from a question that names
+  // the two things to compare.
+  //
+  // So when the intent is "both", each side is guaranteed half the budget and
+  // may borrow whatever the other side cannot fill. A city with places but no
+  // events still returns a full page of places; a city with both returns two of
+  // each, which is what "compare" needs.
+  const wantsBoth = intent.kind === "both";
+  const placeQuota = wantsBoth ? Math.ceil(intent.limit / 2) : intent.limit;
+
+  const placesFirstPass = uniquePlaces.slice(0, placeQuota);
+  const eventQuota = wantsBoth
+    // Half, plus anything the places could not fill.
+    ? Math.max(0, intent.limit - placesFirstPass.length)
+    : intent.kind === "events"
+      ? intent.limit
+      : Math.max(0, intent.limit - placesFirstPass.length);
+  const selectedEvents = uniqueEvents.slice(0, eventQuota);
+
+  // Places may now reclaim any slots the events left empty, so a question about
+  // both never returns fewer results than one about either.
+  const selectedPlaces = uniquePlaces.slice(
+    0,
+    Math.max(placesFirstPass.length, intent.limit - selectedEvents.length),
+  );
   const copy = language === "en"
     ? {
         intro: "Here are results directly from B-Social:",

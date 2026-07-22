@@ -476,3 +476,40 @@ describe("inferDiscoveryIntent: near-miss city names", () => {
     expect(inferDiscoveryIntent("hvor er ribs").city).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// A "both" question must come back with both.
+//
+// Places used to take the entire budget and events got the remainder, which for
+// a full page of places is nothing. Live 2026-07-22: "sammenlign koncert vs
+// museumstur i København" returned 4 places and 0 events -- a comparison
+// missing one side, from a question that names the two things to compare.
+// ---------------------------------------------------------------------------
+describe("formatFallbackReply: both-kind budget", () => {
+  const mkPlaces = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `p${i}`, name: `Sted ${i}`, city: "København" }));
+  const mkEvents = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `e${i}`, title: `Event ${i}`, location: "København" }));
+
+  it("gives events a share when both are plentiful", () => {
+    const intent = inferDiscoveryIntent("sammenlign koncert vs museumstur i København");
+    expect(intent.kind).toBe("both");
+    const out = formatFallbackReply(intent, mkPlaces(10) as never, mkEvents(10) as never, "da");
+    expect(out.place_ids.length).toBeGreaterThan(0);
+    expect(out.event_ids.length).toBeGreaterThan(0);
+    expect(out.place_ids.length + out.event_ids.length).toBeLessThanOrEqual(intent.limit);
+  });
+
+  it("still fills the page with places when there are no events", () => {
+    const intent = inferDiscoveryIntent("museer og koncerter i København");
+    const out = formatFallbackReply(intent, mkPlaces(10) as never, [] as never, "da");
+    // Reserving half for events must not cost results when events do not exist.
+    expect(out.place_ids.length).toBe(intent.limit);
+  });
+
+  it("still fills the page with events when there are no places", () => {
+    const intent = inferDiscoveryIntent("museer og koncerter i København");
+    const out = formatFallbackReply(intent, [] as never, mkEvents(10) as never, "da");
+    expect(out.event_ids.length).toBe(intent.limit);
+  });
+});
