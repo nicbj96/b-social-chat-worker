@@ -105,3 +105,57 @@ describe("enforceRateLimit", () => {
     expect(response).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// 429s are recorded, and what is recorded is deliberately less than what is known.
+//
+// The actor key is sha256(pathname || connecting IP). That is opaque to read
+// but NOT anonymous -- IPv4 is four billion values, so a full hash brute-forces
+// back to an address in minutes. Persisting it whole would turn a monitoring
+// feature into a table of visitor IPs. Only a 12-character prefix is stored.
+// ---------------------------------------------------------------------------
+describe("rate limit abuse logging", () => {
+  const ENV_BASE = { SUPABASE_URL: "https://db.test", SUPABASE_KEY: "k" };
+  const CORS = { "Access-Control-Allow-Origin": "*" };
+
+  function post(ip = "203.0.113.9") {
+    return new Request("https://w.test/chat", {
+      method: "POST",
+      headers: { "CF-Connecting-IP": ip },
+    });
+  }
+
+  it("writes one row per 429 and never the full key or the IP", async () => {
+    const sent: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (u: RequestInfo | URL, init?: RequestInit) => {
+      sent.push({ url: String(u), body: JSON.parse(String(init?.body ?? "{}")) });
+      return new Response("", { status: 201 });
+    }) as typeof fetch;
+    try {
+      // No RATE_LIMITER binding -> local budget; exhaust it to force a 429.
+      let last: Response | null = null;
+      for (let i = 0; i < 40; i++) last = await enforceRateLimit(post(), ENV_BASE, "/chat", CORS);
+      expect(last?.status).toBe(429);
+
+      expect(sent.length).toBeGreaterThan(0);
+      const row = sent[0].body as { actor_prefix: string; bucket: string; path: string };
+      expect(sent[0].url).toContain("/rest/v1/rate_limit_events");
+      expect(row.path).toBe("/chat");
+      expect(row.bucket).toBe("public-ai");
+      // A prefix, not the whole digest, and not the address.
+      expect(row.actor_prefix).toHaveLength(12);
+      expect(row.actor_prefix.startsWith("v1:")).toBe(false);
+      expect(JSON.stringify(row)).not.toContain("203.0.113.9");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it("still rate-limits when logging is impossible", async () => {
+    // No credentials at all: the control must not depend on the record of it.
+    let last: Response | null = null;
+    for (let i = 0; i < 40; i++) last = await enforceRateLimit(post("198.51.100.4"), {}, "/chat", CORS);
+    expect(last?.status).toBe(429);
+  });
+});

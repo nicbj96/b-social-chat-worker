@@ -25,6 +25,51 @@ export async function rateLimitActorKey(request: Request, pathname: string): Pro
 
 export interface RateLimitEnv {
   RATE_LIMITER?: DurableObjectNamespace<RateLimitDurableObject>;
+  SUPABASE_URL?: string;
+  SUPABASE_KEY?: string;
+}
+
+/**
+ * Record one 429 so abuse is reviewable.
+ *
+ * Only the first 12 hex characters of the actor key are stored. The full key is
+ * sha256(pathname || connecting IP), which is opaque to read but NOT anonymous:
+ * IPv4 has four billion values, so a complete hash brute-forces back to an
+ * address in minutes. Persisting it whole would quietly turn a monitoring
+ * feature into a table of visitor IP addresses.
+ *
+ * A prefix still groups a repeat offender within a window, which is the only
+ * question abuse review actually asks, while leaving reversal ambiguous.
+ *
+ * Fire-and-forget and failure-silent: a logging outage must never turn into a
+ * rate-limiting outage.
+ */
+async function recordRateLimitHit(
+  env: RateLimitEnv,
+  key: string,
+  bucket: RateLimitBucket,
+  pathname: string,
+): Promise<void> {
+  if (!env.SUPABASE_URL || !env.SUPABASE_KEY) return;
+  try {
+    await fetch(`${env.SUPABASE_URL}/rest/v1/rate_limit_events`, {
+      method: "POST",
+      headers: {
+        apikey: env.SUPABASE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_KEY}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify({
+        actor_prefix: key.replace(/^v1:/, "").slice(0, 12),
+        bucket,
+        path: pathname,
+      }),
+      signal: AbortSignal.timeout(3000),
+    });
+  } catch {
+    /* never surface */
+  }
 }
 
 const LIMITS: Record<RateLimitBucket, number> = {
@@ -74,16 +119,22 @@ export async function enforceRateLimit(
   if (!bucket) return null;
 
   const key = await rateLimitActorKey(request, pathname);
+  // Every 429 goes through here, so there is exactly one place to forget.
+  const blocked = (retryAfterSeconds?: number): Response => {
+    void recordRateLimitHit(env, key, bucket, pathname);
+    return rateLimitedResponse(corsHeaders, retryAfterSeconds);
+  };
+
   if (!env.RATE_LIMITER) {
-    return consumeLocalBudget(key, bucket) ? null : rateLimitedResponse(corsHeaders);
+    return consumeLocalBudget(key, bucket) ? null : blocked();
   }
 
   try {
     const stub = env.RATE_LIMITER.getByName(key);
     const decision = await stub.consume(LIMITS[bucket], WINDOW_MS);
-    return decision.success ? null : rateLimitedResponse(corsHeaders, decision.retryAfterSeconds);
+    return decision.success ? null : blocked(decision.retryAfterSeconds);
   } catch {
     console.error(JSON.stringify({ event: "durable_rate_limiter_unavailable", bucket, pathname, fallback: "local" }));
-    return consumeLocalBudget(key, bucket) ? null : rateLimitedResponse(corsHeaders);
+    return consumeLocalBudget(key, bucket) ? null : blocked();
   }
 }
