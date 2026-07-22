@@ -30,7 +30,10 @@ type EventResult = { id?: string; title?: string; location?: string; date?: stri
  *      languages — for, weekend, festival, park, jazz — are excluded rather
  *      than assigned to one side, because a shared word is evidence of nothing
  *      and was most of what the old lists contained. "to" and "at" are
- *      excluded for the same reason: both are ordinary Danish words. But
+ *      excluded for the same reason: both are ordinary Danish words. "find"
+ *      went the same way on 2026-07-22: it is the Danish imperative of
+ *      "finde", so "Find quidditch-turneringer i Thisted" scored English 1,
+ *      Danish 0 and was answered in English. But
  *      in/of/on/from/with ARE distinctive — Danish uses i/af/på/fra/med, which
  *      are different tokens and cannot match a word-boundaried "in".
  *
@@ -44,7 +47,7 @@ const DANISH_WORDS =
   /\b(hvad|hvor|hvornår|hvilke|jeg|ikke|noget|sker|kan|vil|skal|der|det|den|og|på|til|er|en|et|som|har|gerne|lidt|mig|dig|min|din|vise|find(?:e)?r|steder|aften|weekenden|nær|tak|hej)\b/giu;
 
 const ENGLISH_WORDS =
-  /\b(the|is|are|was|what|where|when|how|why|you|your|yours|me|my|mine|want|any|good|some|something|anything|there|their|give|ideas|happening|free|help|hello|hi|hey|please|show|near|nearby|around|this|these|those|tonight|tomorrow|today|weekend|looking|find|recommend|suggest|can|could|would|should|do|does|did|going|go|out|about|thanks|thank|in|of|on|from|with)\b/giu;
+  /\b(the|is|are|was|what|where|when|how|why|you|your|yours|me|my|mine|want|any|good|some|something|anything|there|their|give|ideas|happening|free|help|hello|hi|hey|please|show|near|nearby|around|this|these|those|tonight|tomorrow|today|weekend|looking|recommend|suggest|can|could|would|should|do|does|did|going|go|out|about|thanks|thank|in|of|on|from|with)\b/giu;
 
 export function inferResponseLanguage(message: string): ResponseLanguage {
   const text = String(message || "").toLocaleLowerCase("da-DK");
@@ -84,6 +87,12 @@ const KNOWN_CITIES = [
   "Horsens", "Herning", "Viborg", "Skagen", "Hjørring", "Aabenraa", "Nykøbing",
   "København", "Copenhagen", "Aalborg", "Ålborg", "Aarhus", "Århus", "Odense",
   "Vejle", "Køge", "Koge", "Ribe", "Møn",
+  // Added 2026-07-22 after "quidditch-turneringer i Thisted" answered with
+  // Skagen, Rebild and Blokhus: a town missing from this list gets NO city
+  // filter, so the question quietly stops being about that place.
+  "Frederikssund", "Brønderslev", "Kalundborg", "Middelfart", "Fredericia",
+  "Haderslev", "Nakskov", "Ringsted", "Thisted", "Holbæk", "Nyborg",
+  "Grenaa", "Hobro", "Struer", "Varde", "Skive", "Ikast", "Sorø", "Rønne",
   // Nordic neighbours the chat is asked about
   "Stockholm", "Göteborg", "Goteborg", "Helsinki", "Bergen", "Malmö", "Malmo",
   "Oslo",

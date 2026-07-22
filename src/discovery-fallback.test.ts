@@ -324,3 +324,26 @@ describe("category rules do not route through empty tags", () => {
     expect(inferDiscoveryIntent("jazz i København").queryTag).toBe("jazz");
   });
 });
+
+describe("shared words must not decide the language", () => {
+  it("answers a Danish question in Danish even when it starts with 'Find'", () => {
+    // "find" is the Danish imperative of "finde" as well as an English verb.
+    // Counting it as English answered "Find quidditch-turneringer i Thisted"
+    // in English, live, on 2026-07-22.
+    expect(inferResponseLanguage("Find quidditch-turneringer i Thisted i morgen")).toBe("da");
+    expect(inferResponseLanguage("Find koncerter i Aarhus")).toBe("da");
+  });
+
+  it("still detects genuinely English questions", () => {
+    expect(inferResponseLanguage("what is happening this weekend?")).toBe("en");
+    expect(inferResponseLanguage("show me something good nearby")).toBe("en");
+  });
+});
+
+describe("towns that exist must not fall through to a global search", () => {
+  for (const town of ["Thisted", "Holbæk", "Kalundborg", "Fredericia", "Rønne"]) {
+    it(`${town} is recognised as a city`, () => {
+      expect(inferDiscoveryIntent(`hvad sker der i ${town}`).city).toBe(town);
+    });
+  }
+});
