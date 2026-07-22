@@ -119,12 +119,24 @@ export async function searchPlaces(
 ) {
   let query = supabase
     .from("places")
-    .select("id, name, description, city, region, main_categories, tags, smart_tags, rating_avg, metadata")
+    .select("id, name, description, city, nearest_city, region, main_categories, tags, smart_tags, rating_avg, metadata")
     .order("rating_avg", { ascending: false })
     .limit(8);
 
   if (args.city) {
-    query = query.ilike("city", `%${args.city}%`);
+    // Match city OR nearest_city. 82.5% of places have NO city -- measured
+    // 2026-07-22, 122,113 of 148,075 -- so filtering on `city` alone made four
+    // fifths of the catalogue unreachable by any city search. That is why
+    // "museer i Aarhus" came back with cafes: the museums were there, they just
+    // had nothing for the filter to match.
+    //
+    // nearest_city is DERIVED from coordinates (nearest same-country place that
+    // does have a city, capped at 25km), so it is a weaker claim than city and
+    // deliberately kept in its own column rather than written into city.
+    const needle = String(args.city).replace(/[%,()]/g, "").trim();
+    if (needle) {
+      query = query.or(`city.ilike.%${needle}%,nearest_city.ilike.%${needle}%`);
+    }
   }
 
   const placeCategory = normalizeCategory(args.category);
