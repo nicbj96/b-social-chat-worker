@@ -245,3 +245,82 @@ describe("inferResponseLanguage — ordinary phrasing, not just the happy case",
     expect(inferResponseLanguage("is there noget i københavn")).toBe("da");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Danish plurals must reach their category.
+// ---------------------------------------------------------------------------
+// The music rule used a closing \b where every other rule used \w*, so
+// "koncerter" -- the natural plural, and far more common than the singular --
+// matched nothing and the reply came back with no category filter at all.
+// Verified live before the fix: "koncerter i København" returned a meditation
+// session and a running club, correctly located and entirely wrong.
+describe("category rules survive Danish inflection", () => {
+  // Asserts that SOME category was inferred, on whichever axis the query is
+  // about. inferDiscoveryIntent deliberately sets eventCategory only for
+  // event-seeking questions and placeCategory only for place-seeking ones, so
+  // pinning the wrong field tests the router rather than the inflection.
+  const cases = [
+    "koncerter i København",
+    "koncert i Aarhus",
+    "musikken i byen",
+    "festivaler til sommer",
+    "museer i Roskilde",
+    "udstillinger",
+    "løbeklubber",
+    "restauranter",
+  ];
+  for (const q of cases) {
+    it(`"${q}" reaches a category`, () => {
+      const intent = inferDiscoveryIntent(q);
+      expect(
+        intent.eventCategory ?? intent.placeCategory,
+        `"${q}" matched no category rule — a Danish inflection is falling through`,
+      ).toBeTruthy();
+    });
+  }
+
+  it("maps concert plurals to music specifically, not just to something", () => {
+    // The actual regression: "koncerter" must reach MUSIC, not merely match.
+    const i = inferDiscoveryIntent("koncerter i København");
+    expect(i.eventCategory ?? i.placeCategory).toContain("musik");
+  });
+
+  it("does not invent a category for an unrelated question", () => {
+    // The rule must not become so loose that everything matches something.
+    expect(inferDiscoveryIntent("hvad kan man lave i weekenden").eventCategory).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A rule's tag must not be narrower than its category unless that tag is real.
+// ---------------------------------------------------------------------------
+// index.ts prefers a SPECIFIC tag over the category, so a tag no event carries
+// silently empties the answer. Measured 2026-07-22 on live data: the tags
+// "musik", "mad", "motion", "natur" and "familie" are carried by ZERO events,
+// while "jazz" (77) and "kunst" (2.005) are real. The music rule used
+// tag: "jazz", so every music question became a jazz question -- 0 results in
+// København against 279 real music events.
+describe("category rules do not route through empty tags", () => {
+  const generalQueries = [
+    "koncerter i København",
+    "restauranter i Aarhus",
+    "løbeklubber i Odense",
+  ];
+  for (const q of generalQueries) {
+    it(`"${q}" routes to its category, not a narrower tag`, () => {
+      const i = inferDiscoveryIntent(q);
+      const cat = i.eventCategory ?? i.placeCategory;
+      expect(cat).toBeTruthy();
+      // Equal means index.ts uses the CATEGORY. Different means it uses the tag,
+      // which is only safe when that tag is genuinely populated.
+      if (i.queryTag && i.eventCategory) {
+        expect(i.queryTag).toBe(i.eventCategory);
+      }
+    });
+  }
+
+  it("still honours an explicitly narrow request", () => {
+    // "jazz" is real (77 events), so asking for it by name should use it.
+    expect(inferDiscoveryIntent("jazz i København").queryTag).toBe("jazz");
+  });
+});

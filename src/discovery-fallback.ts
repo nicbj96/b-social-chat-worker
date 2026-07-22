@@ -112,7 +112,22 @@ const REGION_TO_CITY: Record<string, string> = {
 };
 
 const CATEGORY_RULES = [
-  { test: /\b(jazz|koncert|musik|festival)\b/iu, placeCategory: "musik-lyd", eventCategory: "musik", tag: "jazz" },
+  // \w* rather than a closing \b, matching every other rule here. With the
+  // boundary, Danish plurals did not match their own singular: "koncerter" --
+  // far more natural than "koncert" -- got NO category filter, so asking for
+  // concerts in København returned a meditation session and a running club,
+  // correctly located and entirely wrong. Also fixes musikken, festivaler and
+  // jazzklub. Same failure the museum rule below already documents for
+  // "museer"; music was simply left behind.
+  // `tag` MUST equal `eventCategory` unless a narrower tag genuinely exists and
+  // is populated. index.ts:888 prefers a specific tag over the category, so a
+  // tag nobody carries silently empties the whole answer.
+  //
+  // This said tag: "jazz", so every music question became a jazz question.
+  // Measured 2026-07-22: jazz-tagged events in København = 0, music-category
+  // events in København = 279. The narrower tag is still used when the reader
+  // actually says "jazz" — that is the branch below this list.
+  { test: /\b(jazz|koncert|musik|festival)\w*/iu, placeCategory: "musik-lyd", eventCategory: "musik", tag: "musik" },
   { test: /\b(natur|outdoor|skov|park|vandring|hundeskov)\w*/iu, placeCategory: "natur-outdoor", eventCategory: "natur", tag: "natur" },
   { test: /\b(børn|barn|familie)\w*/iu, placeCategory: "børn-familie", eventCategory: "familie", tag: "familie" },
   // "musee" as well as "museum" -- same Danish stem change as the place signal
@@ -120,8 +135,8 @@ const CATEGORY_RULES = [
   // reply was correctly located and still returned a festival and a mountain
   // bike trail.
   { test: /\b(kultur|kunst|museum|musee|udstilling)\w*/iu, placeCategory: "kultur-kunst", eventCategory: "kunst", tag: "kunst" },
-  { test: /\b(mad|restaurant|café|cafe|drikke)\w*/iu, placeCategory: "mad-drikke", eventCategory: "mad_drikke", tag: "mad" },
-  { test: /\b(motion|fitness|løb|cykel|sport)\w*/iu, placeCategory: "motion-fitness", eventCategory: "sport", tag: "motion" },
+  { test: /\b(mad|restaurant|café|cafe|drikke)\w*/iu, placeCategory: "mad-drikke", eventCategory: "mad_drikke", tag: "mad_drikke" },  // was "mad": 0 events carry it
+  { test: /\b(motion|fitness|løb|cykel|sport)\w*/iu, placeCategory: "motion-fitness", eventCategory: "sport", tag: "sport" },  // was "motion": 0 events carry it
 ] as const;
 
 export function inferDiscoveryIntent(message: string, contextCity?: string): DiscoveryIntent {
