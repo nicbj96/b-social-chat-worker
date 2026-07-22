@@ -17,6 +17,7 @@ import { sendWebPush, type PushMessage } from "./webpush";
 import { isSafeEntityId, isValidUuid, clampString, clampNumber } from "./validate";
 import { guardedFetch } from "./fetchguard";
 import { enforceRateLimit, type RateLimitEnv } from "./ratelimit";
+import { runAiCounted, aiCostSnapshot } from "./aiCost";
 import { aiBreakerIsOpen, formatFallbackReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 
 export { RateLimitDurableObject } from "./rate-limit-do";
@@ -123,6 +124,17 @@ const worker = {
     }
 
     // Image understanding (Phase 7) — describe a photo the founder shows us.
+    if (url.pathname === "/admin/ai-cost" && request.method === "GET") {
+      // Estimated AI spend for THIS isolate. Admin-gated: call volume is
+      // operational data, not public. Estimate only -- Cloudflare returns no
+      // usage to the Worker, so this is calls x published neuron rates, labelled
+      // as such. It is the counting a real budget is blocked on, not a bill.
+      if (request.headers.get("X-Admin-Ask-Key") !== env.ADMIN_ASK_KEY) {
+        return jsonResponse({ ok: false, error: "unauthorized" }, 401);
+      }
+      return jsonResponse({ ok: true, estimate: true, ...aiCostSnapshot() });
+    }
+
     if (url.pathname === "/admin/vision" && request.method === "POST") {
       return handleVision(request, env);
     }
@@ -283,7 +295,7 @@ async function correctDanish(env: Env, raw: string): Promise<string> {
   const text = (raw || "").trim();
   if (!text || text.length > 400) return text;
   try {
-    const out: any = await env.AI.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
+    const out: any = await runAiCounted(env.AI, "@cf/meta/llama-4-scout-17b-16e-instruct", {
       messages: [
         {
           role: "system",
@@ -346,7 +358,7 @@ async function transcribeTurbo(env: Env, bytes: Uint8Array): Promise<{ text: str
   }
   const audioB64 = btoa(binary);
   const model = env.WHISPER_MODEL || "@cf/openai/whisper-large-v3-turbo";
-  const out: any = await env.AI.run(model, {
+  const out: any = await runAiCounted(env.AI, model, {
     audio: audioB64,
     task: "transcribe",
     language: "da", // voice is ALWAYS Danish — force it, never auto-detect
@@ -403,7 +415,7 @@ async function handleTranscribe(request: Request, env: Env): Promise<Response> {
   if (!text) {
     // Last resort: base Whisper (no language control, but better than silence).
     try {
-      const out: any = await env.AI.run("@cf/openai/whisper", { audio: [...bytes] });
+      const out: any = await runAiCounted(env.AI, "@cf/openai/whisper", { audio: [...bytes] });
       text = String(out?.text ?? "").trim();
       model = "@cf/openai/whisper";
       usedFallback = true;
@@ -440,7 +452,7 @@ async function handleImage(request: Request, env: Env): Promise<Response> {
   }
   if (!prompt.trim()) return jsonResponse({ ok: false, error: "prompt required" }, 400);
   try {
-    const out: any = await env.AI.run("@cf/black-forest-labs/flux-1-schnell", { prompt, steps: 4 });
+    const out: any = await runAiCounted(env.AI, "@cf/black-forest-labs/flux-1-schnell", { prompt, steps: 4 });
     // Flux returns { image: "<base64 jpeg>" }.
     const image = out?.image ? String(out.image) : "";
     if (!image) return jsonResponse({ ok: false, error: "no image returned" }, 502);
@@ -470,7 +482,7 @@ async function handleVision(request: Request, env: Env): Promise<Response> {
   if (b64.length > 8_000_000) return jsonResponse({ ok: false, error: "image too large" }, 400);
   try {
     const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-    const out: any = await env.AI.run("@cf/llava-hf/llava-1.5-7b-hf", { image: [...bytes], prompt, max_tokens: 300 });
+    const out: any = await runAiCounted(env.AI, "@cf/llava-hf/llava-1.5-7b-hf", { image: [...bytes], prompt, max_tokens: 300 });
     const text = String(out?.description ?? out?.response ?? "").trim();
     if (!text) return jsonResponse({ ok: false, error: "no description" }, 502);
     return jsonResponse({ ok: true, text });
@@ -660,7 +672,7 @@ async function handleEmbed(request: Request, env: Env): Promise<Response> {
       .filter((t) => t.trim().length > 0);
     if (texts.length === 0) return jsonResponse({ error: "text or texts required" }, 400);
 
-    const result: any = await env.AI.run("@cf/baai/bge-m3", { text: texts });
+    const result: any = await runAiCounted(env.AI, "@cf/baai/bge-m3", { text: texts });
     // bge-m3 returns { data: number[][] } or { shape, data }
     const embeddings = result?.data ?? [];
     return jsonResponse({ embeddings, count: embeddings.length, dim: embeddings[0]?.length ?? 0 });
@@ -690,7 +702,7 @@ async function handleSemanticSearch(request: Request, env: Env): Promise<Respons
     const query = clampString(body.query, 1000);
     if (query.trim().length === 0) return jsonResponse({ error: "query required" }, 400);
 
-    const emb: any = await env.AI.run("@cf/baai/bge-m3", { text: [query] });
+    const emb: any = await runAiCounted(env.AI, "@cf/baai/bge-m3", { text: [query] });
     const vec = emb?.data?.[0];
     if (!vec) return jsonResponse({ error: "embedding failed" }, 500);
 
@@ -1100,7 +1112,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
     // First AI call — may include tool calls
     let aiResponse: any;
     try {
-      aiResponse = await env.AI.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
+      aiResponse = await runAiCounted(env.AI, "@cf/meta/llama-4-scout-17b-16e-instruct", {
         messages,
         tools: TOOLS,
         tool_choice: "auto",
@@ -1148,7 +1160,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                 case "semantic_search": {
                   // Use our deployed /search flow internally
                   try {
-                    const emb: any = await env.AI.run("@cf/baai/bge-m3", { text: [fnArgs.query] });
+                    const emb: any = await runAiCounted(env.AI, "@cf/baai/bge-m3", { text: [fnArgs.query] });
                     const vec = emb?.data?.[0];
                     if (!vec) { result = { error: "embedding failed" }; break; }
                     const sbHeaders = { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}`, "Content-Type": "application/json" };
@@ -1385,7 +1397,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       // Second AI call — now with data from Supabase
       let finalResponse: any;
       try {
-        finalResponse = await env.AI.run("@cf/meta/llama-4-scout-17b-16e-instruct", {
+        finalResponse = await runAiCounted(env.AI, "@cf/meta/llama-4-scout-17b-16e-instruct", {
           messages,
         });
       } catch (error) {
