@@ -115,7 +115,11 @@ const CATEGORY_RULES = [
   { test: /\b(jazz|koncert|musik|festival)\b/iu, placeCategory: "musik-lyd", eventCategory: "musik", tag: "jazz" },
   { test: /\b(natur|outdoor|skov|park|vandring|hundeskov)\w*/iu, placeCategory: "natur-outdoor", eventCategory: "natur", tag: "natur" },
   { test: /\b(børn|barn|familie)\w*/iu, placeCategory: "børn-familie", eventCategory: "familie", tag: "familie" },
-  { test: /\b(kultur|kunst|museum|udstilling)\w*/iu, placeCategory: "kultur-kunst", eventCategory: "kunst", tag: "kunst" },
+  // "musee" as well as "museum" -- same Danish stem change as the place signal
+  // above. Without it "museer i Roskilde" matched no CATEGORY either, so the
+  // reply was correctly located and still returned a festival and a mountain
+  // bike trail.
+  { test: /\b(kultur|kunst|museum|musee|udstilling)\w*/iu, placeCategory: "kultur-kunst", eventCategory: "kunst", tag: "kunst" },
   { test: /\b(mad|restaurant|café|cafe|drikke)\w*/iu, placeCategory: "mad-drikke", eventCategory: "mad_drikke", tag: "mad" },
   { test: /\b(motion|fitness|løb|cykel|sport)\w*/iu, placeCategory: "motion-fitness", eventCategory: "sport", tag: "motion" },
 ] as const;

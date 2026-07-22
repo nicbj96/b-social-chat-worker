@@ -22,6 +22,8 @@ export type GoldenCase = {
   city: string | null;
   /** Expected discovery kind, when the query clearly implies one. */
   kind?: "places" | "events" | "both";
+  /** Expected placeCategory, when the query names a clear topic. */
+  placeCategory?: string;
   /** Why this case is in the set -- shown when it fails. */
   note: string;
 };
@@ -35,7 +37,7 @@ export const GOLDEN_SET: GoldenCase[] = [
 
   // ── Cities the 14-entry list used to miss entirely. ───────────────────────
   { query: "ting at lave i Skagen", city: "Skagen", note: "fell through to a global search before 2026-07-22" },
-  { query: "museer i Roskilde", city: "Roskilde", kind: "places", note: "fell through before" },
+  { query: "museer i Roskilde", city: "Roskilde", kind: "places", placeCategory: "kultur-kunst", note: "Danish plural of museum changes the stem; matched neither the place signal NOR the category, so the reply was correctly located and still returned a festival and an MTB trail" },
   { query: "restauranter i Esbjerg", city: "Esbjerg", kind: "places", note: "fell through before" },
   { query: "hvad sker der i Helsingør", city: "Helsingør", note: "fell through before" },
   { query: "cafeer i Silkeborg", city: "Silkeborg", kind: "places", note: "fell through before" },
@@ -60,7 +62,7 @@ export const GOLDEN_SET: GoldenCase[] = [
 
 /** Score a run of the set. Returns per-case results plus totals. */
 export function scoreGoldenSet(
-  infer: (query: string) => { city?: string; kind: string },
+  infer: (query: string) => { city?: string; kind: string; placeCategory?: string },
 ): {
   total: number;
   passed: number;
@@ -75,6 +77,9 @@ export function scoreGoldenSet(
     }
     if (c.kind && got.kind !== c.kind) {
       failures.push({ query: c.query, field: "kind", expected: c.kind, got: got.kind, note: c.note });
+    }
+    if (c.placeCategory && got.placeCategory !== c.placeCategory) {
+      failures.push({ query: c.query, field: "placeCategory", expected: c.placeCategory, got: got.placeCategory ?? null, note: c.note });
     }
   }
   return { total: GOLDEN_SET.length, passed: GOLDEN_SET.length - failures.length, failures };
