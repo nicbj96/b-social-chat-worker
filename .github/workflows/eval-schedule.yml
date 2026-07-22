@@ -1,0 +1,58 @@
+name: Golden-set evaluation (production)
+
+# The golden set and eval script already existed. Nothing ran them.
+#
+# On 2026-07-22 the suite was at 7/8 against production and had presumably been
+# failing for some time. Running it once surfaced six real bugs: three of six
+# category rules returning nothing, a Danish plural unable to match its own
+# singular, Danish questions answered in English, eighteen missing towns, a town
+# name parsed as the word "place", and a substitution presented as an answer.
+#
+# Unit tests could not have caught any of them — every individual rule behaved
+# exactly as written. What was missing was anyone asking whether the whole thing
+# still gives a sensible answer to a normal question. This asks, twice a day.
+#
+# No secrets: the eval probes the public /chat endpoint.
+
+on:
+  schedule:
+    # 06:20 and 18:20 UTC. Off the hour deliberately — GitHub's scheduler is
+    # heavily contended at :00 and delays runs by many minutes.
+    - cron: '20 6,18 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chat-eval
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    name: Ask it real questions
+    # Pinned rather than -latest so a GitHub image roll cannot silently change
+    # what this runs on.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      # Pinned to a reviewed commit, unlike deploy.yml in this repo which still
+      # uses a floating @v4 tag. A tag can be moved; a SHA cannot. Worth
+      # aligning deploy.yml the same way — the sibling b-social-pages repo has a
+      # test that enforces exactly this, and it has already caught a real slip.
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Node
+        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      # Fails the run when the assistant stops answering sensibly. That is the
+      # point: a failing check nobody sees is worth nothing, which is precisely
+      # the state this replaces.
+      - name: Evaluate against production
+        run: npm run eval:chat
