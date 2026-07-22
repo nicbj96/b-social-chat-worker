@@ -428,3 +428,51 @@ describe("an event word added one at a time", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Typo-tolerant city resolution.
+//
+// The failure this prevents is not "slightly worse results". When no city
+// resolves, `city` stays undefined and searchPlaces runs with NO location
+// filter, so one dropped letter does not narrow the search -- it deletes the
+// geography. A mistyped "Kbenhavn" answered with a Dock Manager's Office in
+// London and a stadium in Kuwait.
+// ---------------------------------------------------------------------------
+describe("inferDiscoveryIntent: near-miss city names", () => {
+  it("resolves a dropped Danish letter rather than searching the planet", () => {
+    // "Kbenhavn" -- the ø is simply missing, which no substring match catches.
+    expect(inferDiscoveryIntent("cafeer i Kbenhavn").city).toBe("København");
+  });
+
+  it("resolves a transliterated spelling", () => {
+    // Foreign keyboards produce these constantly.
+    expect(inferDiscoveryIntent("restauranter i Koebenhavn").city).toBe("København");
+  });
+
+  it("still prefers an exact match over a fuzzy one", () => {
+    expect(inferDiscoveryIntent("koncerter i Odense").city).toBe("Odense");
+    expect(inferDiscoveryIntent("museer i Roskilde").city).toBe("Roskilde");
+  });
+
+  // The dangerous direction. A loose threshold silently answers for the WRONG
+  // town, which is worse than admitting we did not recognise the place: the
+  // reader gets a confident, plausible, wrong answer instead of a chance to
+  // rephrase. Denmark has Ry, Ribe, Rødby and Roskilde.
+  it("does not invent a city from ordinary Danish words", () => {
+    for (const msg of [
+      "hvilke aktiviteter kan man lave",
+      "find gode spisesteder",
+      "er der koncerter i weekenden",
+      "vis mig museer og udstillinger",
+      "hvad sker der i aften",
+    ]) {
+      expect(inferDiscoveryIntent(msg).city, msg).toBeUndefined();
+    }
+  });
+
+  it("does not match on a too-short fragment", () => {
+    // "Ribe" is four letters; a one-edit window over short tokens would pull in
+    // half the language.
+    expect(inferDiscoveryIntent("hvor er ribs").city).toBeUndefined();
+  });
+});

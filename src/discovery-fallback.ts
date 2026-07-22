@@ -182,6 +182,79 @@ export function inferDiscoveryIntent(message: string, contextCity?: string): Dis
   const eventSignal = /(event|events|koncert|festival|jazz|aktivitet|aktiviteter|weekend|i aften|turnering)\w*/iu.test(text);
   const kind: DiscoveryKind = placeSignal && eventSignal ? "both" : placeSignal ? "places" : eventSignal ? "events" : "both";
 
+/**
+ * Fold a place name to a comparable form: lowercase, diacritics stripped, and
+ * anything that is not a letter removed. "København" and "Koebenhavn" and
+ * "KOBENHAVN" all become "kobenhavn".
+ *
+ * ø and Ø do NOT decompose under NFD -- they are distinct letters, not o with a
+ * mark -- so they are replaced explicitly. Same for đ/ð/ł, which appear in
+ * Nordic and Slavic place names our sources carry.
+ */
+function foldPlace(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/gu, "")
+    .toLowerCase()
+    .replace(/[øœ]/gu, "o")
+    .replace(/[æ]/gu, "ae")
+    .replace(/[đðᵭ]/gu, "d")
+    .replace(/[ł]/gu, "l")
+    .replace(/[^a-z]/gu, "");
+}
+
+/** Levenshtein distance, bounded: returns max+1 as soon as it cannot beat it. */
+function editDistance(a: string, b: string, max: number): number {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+      if (cur[j] < best) best = cur[j];
+    }
+    if (best > max) return max + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/**
+ * Resolve a near-miss city name: "Kbenhavn", "Kobenhaven", "Arhus".
+ *
+ * Why this is not a nicety. When no city resolves, `city` stays undefined and
+ * searchPlaces runs with NO location filter at all -- so a single dropped letter
+ * did not narrow the search, it removed the geography entirely. A mistyped
+ * "Kbenhavn" answered with a Dock Manager's Office in London and a stadium in
+ * Kuwait. Failing to recognise a place must never silently become "search the
+ * whole planet".
+ *
+ * TOKEN-WISE, not against the whole message, because the message is long and a
+ * distance-2 window over it would match almost anything.
+ *
+ * The thresholds are deliberately tight: a word must be at least 5 letters, and
+ * only one edit is allowed below 8 letters. "Ry", "Ribe" and "Roskilde" are all
+ * real Danish towns, and a loose threshold would silently answer for the wrong
+ * one -- worse than admitting we did not recognise it.
+ */
+function fuzzyCity(text: string): string | undefined {
+  const tokens = text.split(/[^\p{L}]+/u).filter((t) => t.length >= 5);
+  if (!tokens.length) return undefined;
+  for (const candidate of KNOWN_CITIES) {
+    const folded = foldPlace(candidate);
+    if (folded.length < 5) continue;
+    const max = folded.length >= 8 ? 2 : 1;
+    for (const token of tokens) {
+      const ft = foldPlace(token);
+      if (!ft || ft === folded) continue; // exact hits are handled before this
+      if (editDistance(ft, folded, max) <= max) return candidate;
+    }
+  }
+  return undefined;
+}
+
   // City aliases for DB search (KBH/Cph → København). Keep full Copenhagen match as København.
   let city: string | undefined;
   if (/\b(kbh|cph|copenhagen)\b/iu.test(text)) city = "København";
@@ -193,6 +266,9 @@ export function inferDiscoveryIntent(message: string, contextCity?: string): Dis
       const region = Object.keys(REGION_TO_CITY).find((r) => lower.includes(r));
       if (region) city = REGION_TO_CITY[region];
     }
+    // Only after the exact and region passes have both failed: a typo should
+    // cost the reader a slightly fuzzy match, not the entire location filter.
+    if (!city) city = fuzzyCity(text);
     if (!city) city = contextCity?.trim() || undefined;
   }
 
