@@ -10,7 +10,7 @@ export type DiscoveryIntent = {
   limit: number;
 };
 
-type PlaceResult = { id?: string; name?: string; city?: string };
+type PlaceResult = { id?: string; name?: string; city?: string; nearest_city?: string };
 type EventResult = { id?: string; title?: string; location?: string; date?: string };
 
 /**
@@ -241,6 +241,7 @@ export function formatFallbackReply(
         intro: "Here are results directly from B-Social:",
         noResults: "I found no results",
         cityMissing: "city not specified",
+        nearCity: "near",
         locationMissing: "location not specified",
         cityPrefix: "in",
         selectedFilters: "with the selected filters.",
@@ -249,12 +250,23 @@ export function formatFallbackReply(
         intro: "Her er resultater direkte fra B-Social:",
         noResults: "Jeg fandt ingen resultater",
         cityMissing: "by ikke angivet",
+        nearCity: "nær",
         locationMissing: "sted ikke angivet",
         cityPrefix: "i",
         selectedFilters: "med de valgte filtre.",
       };
   const lines = [
-    ...selectedPlaces.map((place) => `• ${place.name} — ${place.city || copy.cityMissing}`),
+    // Show the DERIVED city when there is no real one, marked as approximate.
+    // Matching on nearest_city while printing "by ikke angivet" made a place we
+    // had just located look like one we knew nothing about.
+    ...selectedPlaces.map((place) => {
+      const where = place.city
+        ? place.city
+        : place.nearest_city
+          ? `${copy.nearCity} ${place.nearest_city}`
+          : copy.cityMissing;
+      return `• ${place.name} — ${where}`;
+    }),
     ...selectedEvents.map((event) => `• ${event.title} — ${event.location || copy.locationMissing}${event.date ? ` (${event.date})` : ""}`),
   ].slice(0, intent.limit);
 
