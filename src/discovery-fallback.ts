@@ -63,10 +63,53 @@ export function inferResponseLanguage(message: string): ResponseLanguage {
   return "da";
 }
 
+// Whatever is NOT in this list gets no city filter at all, which means the
+// search runs unconstrained and answers from the whole planet. Live on
+// 2026-07-22, "vandreture i Nordjylland" came back with a campsite in
+// Chattogram, Bangladesh and one in Tozeur, Tunisia -- because "Nordjylland"
+// matched nothing here, so the query simply stopped being about Denmark.
+//
+// city-bbox.ts already knows the ~25 Danish cities people actually type; this
+// list had fourteen entries and duplicated it badly. Kept as display names
+// rather than folded keys because supabase-queries matches with
+// ilike('city', '%name%').
+//
+// Longest first: `.find()` takes the first hit, and "Frederiksberg" must not
+// lose to a shorter substring of itself.
 const KNOWN_CITIES = [
-  "Frederikshavn", "København", "Copenhagen", "Aarhus", "Århus", "Aalborg", "Ålborg",
-  "Odense", "Malmö", "Malmo", "Stockholm", "Göteborg", "Oslo", "Bergen", "Helsinki",
+  // Denmark
+  "Frederikshavn", "Frederiksberg", "Frederikssund", "Sønderborg", "Silkeborg",
+  "Holstebro", "Svendborg", "Helsingør", "Helsingor", "Hillerød", "Næstved",
+  "Naestved", "Roskilde", "Slagelse", "Esbjerg", "Randers", "Kolding",
+  "Horsens", "Herning", "Viborg", "Skagen", "Hjørring", "Aabenraa", "Nykøbing",
+  "København", "Copenhagen", "Aalborg", "Ålborg", "Aarhus", "Århus", "Odense",
+  "Vejle", "Køge", "Koge", "Ribe", "Møn",
+  // Nordic neighbours the chat is asked about
+  "Stockholm", "Göteborg", "Goteborg", "Helsinki", "Bergen", "Malmö", "Malmo",
+  "Oslo",
 ];
+
+// Regions are NOT cities and there is no region filter in searchPlaces, so a
+// region name would otherwise fall through to a global search. Mapping each to
+// its principal city keeps the answer in the right part of the country, which
+// is far closer to what was asked than another continent. Recorded as an
+// approximation on purpose -- the honest fix is a region filter in the query
+// layer.
+const REGION_TO_CITY: Record<string, string> = {
+  nordjylland: "Aalborg",
+  midtjylland: "Aarhus",
+  syddanmark: "Odense",
+  sydjylland: "Esbjerg",
+  vestjylland: "Herning",
+  østjylland: "Aarhus",
+  ostjylland: "Aarhus",
+  sjælland: "København",
+  sjaelland: "København",
+  hovedstaden: "København",
+  fyn: "Odense",
+  bornholm: "Rønne",
+  jylland: "Aarhus",
+};
 
 const CATEGORY_RULES = [
   { test: /\b(jazz|koncert|musik|festival)\b/iu, placeCategory: "musik-lyd", eventCategory: "musik", tag: "jazz" },
@@ -88,7 +131,14 @@ export function inferDiscoveryIntent(message: string, contextCity?: string): Dis
   let city: string | undefined;
   if (/\b(kbh|cph|copenhagen)\b/iu.test(text)) city = "København";
   else {
-    city = KNOWN_CITIES.find((candidate) => lower.includes(candidate.toLocaleLowerCase("da-DK"))) || contextCity?.trim() || undefined;
+    city = KNOWN_CITIES.find((candidate) => lower.includes(candidate.toLocaleLowerCase("da-DK")));
+    if (!city) {
+      // A region is not a city, but its principal city is a far better answer
+      // than an unfiltered global search. See REGION_TO_CITY.
+      const region = Object.keys(REGION_TO_CITY).find((r) => lower.includes(r));
+      if (region) city = REGION_TO_CITY[region];
+    }
+    if (!city) city = contextCity?.trim() || undefined;
   }
 
   const category = CATEGORY_RULES.find((rule) => rule.test.test(text));
