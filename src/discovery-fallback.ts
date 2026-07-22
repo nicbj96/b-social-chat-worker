@@ -157,7 +157,25 @@ export function inferDiscoveryIntent(message: string, contextCity?: string): Dis
   // matched NO place signal, fell to the default kind, and "museer og events i
   // Odense" was read as events-only -- the museums half of the question was
   // silently dropped. Every other noun here pluralises by suffix and is fine.
-  const placeSignal = /(sted|steder|park|skov|museum|musee|museet|restaurant|café|cafe)\w*/iu.test(text);
+  //
+  // Danish compounds and Danish town names BOTH end in -sted, so neither a bare
+  // substring nor a plain word boundary is enough on its own:
+  //
+  //   unboundaried  -> "sted" matches inside THIsted and RINGsted, so every
+  //                    question about either town became a PLACES search.
+  //                    "koncerter i Thisted" asked for events and got parks.
+  //   \b(sted)      -> fixes the towns and breaks natursteder and spisesteder,
+  //                    which are ordinary Danish place words.
+  //
+  // The asymmetry that separates them: no Danish town ends in -stedER. So
+  // "sted" must stand at a word boundary, while "steder" may appear anywhere.
+  const placeSignal = /(\b(sted|park|skov|museum|musee|museet|restaurant|café|cafe)\w*|steder)/iu.test(text);
+  // Left as it was, deliberately. Widening this with turnering/kamp/
+  // forestilling/udstilling and the time phrases made almost every message match
+  // BOTH signals, which turned six passing tests into "both" and lost the
+  // routing entirely. The bug found today was the missing boundary on the PLACE
+  // signal, not a thin event vocabulary -- widening that is a separate change
+  // and needs its own evidence.
   const eventSignal = /(event|events|koncert|festival|jazz|aktivitet|aktiviteter|weekend|i aften)\w*/iu.test(text);
   const kind: DiscoveryKind = placeSignal && eventSignal ? "both" : placeSignal ? "places" : eventSignal ? "events" : "both";
 

@@ -379,3 +379,39 @@ describe("a substitution is labelled as one", () => {
     expect(r.reply).toMatch(/no events/i);
   });
 });
+
+describe("a town name must not look like a place signal", () => {
+  it("Thisted is a town, not the word 'sted'", () => {
+    // "sted" matched inside THIsted, so every Thisted question became a places
+    // search. "koncerter i Thisted" asked for events and got parks.
+    expect(inferDiscoveryIntent("koncerter i Thisted").kind).toBe("events");
+  });
+
+  it("Ringsted too", () => {
+    expect(inferDiscoveryIntent("events i Ringsted").kind).toBe("events");
+  });
+
+  it("but the actual word still signals places", () => {
+    expect(inferDiscoveryIntent("gode steder i Aarhus").kind).toBe("places");
+    expect(inferDiscoveryIntent("restauranter i Odense").kind).toBe("places");
+  });
+
+
+});
+
+describe("Danish compounds vs Danish town names", () => {
+  it("routes town questions by what was asked, not by the town's name", () => {
+    // "sted" lives inside THIsted and RINGsted. Unboundaried, every question
+    // about either town became a places search.
+    expect(inferDiscoveryIntent("koncerter i Thisted").kind).toBe("events");
+    expect(inferDiscoveryIntent("events i Ringsted").kind).toBe("events");
+  });
+
+  it("still treats real compound place words as places", () => {
+    // Adding \b alone fixed the towns and broke these, which are ordinary
+    // Danish. No town ends in -steder, which is what separates them.
+    for (const q of ["natursteder nær Frederikshavn", "spisesteder i Odense", "gode steder i Aarhus"]) {
+      expect(inferDiscoveryIntent(q).kind, q).toBe("places");
+    }
+  });
+});
