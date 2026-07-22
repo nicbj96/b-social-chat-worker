@@ -52,7 +52,7 @@ async function recordRateLimitHit(
 ): Promise<void> {
   if (!env.SUPABASE_URL || !env.SUPABASE_KEY) return;
   try {
-    await fetch(`${env.SUPABASE_URL}/rest/v1/rate_limit_events`, {
+    const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rate_limit_events`, {
       method: "POST",
       headers: {
         apikey: env.SUPABASE_KEY,
@@ -67,8 +67,28 @@ async function recordRateLimitHit(
       }),
       signal: AbortSignal.timeout(3000),
     });
-  } catch {
-    /* never surface */
+    if (!res.ok) {
+      // Loud in the logs, harmless to the request. Verified 2026-07-22: six real
+      // 429s produced zero rows, because this worker's SUPABASE_KEY is the ANON
+      // key and rate_limit_events grants INSERT to service_role only -- which is
+      // correct, since granting anon write on an abuse log would let anyone fill
+      // it with noise or simply fill the disk.
+      //
+      // Left failing LOUDLY rather than removed. A silent no-op in production is
+      // the exact "looks like it works" state worth avoiding, and this starts
+      // working the moment the worker is given a service_role key -- which means
+      // setting a secret, and that is the owner's to do, not mine.
+      console.error(JSON.stringify({
+        event: "rate_limit_audit_write_failed",
+        status: res.status,
+        hint: "SUPABASE_KEY likely lacks INSERT on rate_limit_events (service_role required)",
+      }));
+    }
+  } catch (err) {
+    console.error(JSON.stringify({
+      event: "rate_limit_audit_write_threw",
+      detail: String(err instanceof Error ? err.message : err).slice(0, 120),
+    }));
   }
 }
 
