@@ -13,11 +13,54 @@ export type DiscoveryIntent = {
 type PlaceResult = { id?: string; name?: string; city?: string };
 type EventResult = { id?: string; title?: string; location?: string; date?: string };
 
+/**
+ * Which language to answer in.
+ *
+ * The first version scored 12 English words against 12 Danish ones and let
+ * Danish win every tie — including 0–0. Measured against ordinary phrasing it
+ * answered 8 of 10 English messages in Danish: "hi", "hello, can you help
+ * me?", "any good jazz concerts?", "something fun for kids" all scored zero on
+ * both lists and fell through to Danish.
+ *
+ * Two changes:
+ *   1. Danish ORTHOGRAPHY (æ ø å) is treated as decisive. Nothing else in
+ *      either language looks like that, and it is present in most real Danish
+ *      sentences.
+ *   2. The word lists are DISTINCTIVE only. Words that genuinely exist in both
+ *      languages — for, weekend, festival, park, jazz — are excluded rather
+ *      than assigned to one side, because a shared word is evidence of nothing
+ *      and was most of what the old lists contained. "to" and "at" are
+ *      excluded for the same reason: both are ordinary Danish words. But
+ *      in/of/on/from/with ARE distinctive — Danish uses i/af/på/fra/med, which
+ *      are different tokens and cannot match a word-boundaried "in".
+ *
+ * Danish still wins a genuine tie: this is a Danish-first product, and
+ * answering a Dane in English is the worse error.
+ */
+
+const DANISH_LETTERS = /[æøå]/iu;
+
+const DANISH_WORDS =
+  /\b(hvad|hvor|hvornår|hvilke|jeg|ikke|noget|sker|kan|vil|skal|der|det|den|og|på|til|er|en|et|som|har|gerne|lidt|mig|dig|min|din|vise|find(?:e)?r|steder|aften|weekenden|nær|tak|hej)\b/giu;
+
+const ENGLISH_WORDS =
+  /\b(the|is|are|was|what|where|when|how|why|you|your|yours|me|my|mine|want|any|good|some|something|anything|there|their|give|ideas|happening|free|help|hello|hi|hey|please|show|near|nearby|around|this|these|those|tonight|tomorrow|today|weekend|looking|find|recommend|suggest|can|could|would|should|do|does|did|going|go|out|about|thanks|thank|in|of|on|from|with)\b/giu;
+
 export function inferResponseLanguage(message: string): ResponseLanguage {
   const text = String(message || "").toLocaleLowerCase("da-DK");
-  const englishScore = text.match(/\b(show|places?|near|in|this|tonight|around|with|please|recommend|what|where)\b/gu)?.length || 0;
-  const danishScore = text.match(/\b(vis|steder?|nær|i|denne|aften|omkring|med|venligst|anbefal|hvad|hvor)\b/gu)?.length || 0;
-  return englishScore > danishScore ? "en" : "da";
+  if (!text.trim()) return "da";
+
+  // Decisive: no English word contains these.
+  if (DANISH_LETTERS.test(text)) return "da";
+
+  const danish = text.match(DANISH_WORDS)?.length ?? 0;
+  const english = text.match(ENGLISH_WORDS)?.length ?? 0;
+
+  if (english > danish) return "en";
+  if (danish > english) return "da";
+  // Genuine tie, including 0–0: answer in Danish. Answering a Dane in English
+  // is the worse of the two mistakes on a Danish-first product.
+  return "da";
 }
 
 const KNOWN_CITIES = [

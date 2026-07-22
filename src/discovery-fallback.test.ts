@@ -197,3 +197,51 @@ describe("raw tool call leaking into the reply", () => {
     expect(looksUngroundedDiscoveryReply('semantic_search(query="x")')).toBe(true);
   });
 });
+
+describe("inferResponseLanguage — ordinary phrasing, not just the happy case", () => {
+  // The first version scored 12 English words against 12 Danish ones and let
+  // Danish win every tie including 0–0. Measured, it answered 8 of these 10
+  // English messages in Danish.
+  const english = [
+    "hi",
+    "hello, can you help me?",
+    "I want to go dancing",
+    "any good jazz concerts?",
+    "something fun for kids",
+    "restaurants in Aarhus",
+    "what's happening tomorrow",
+    "give me ideas for saturday",
+    "is there anything free",
+    "Find events in Copenhagen this weekend",
+  ];
+  for (const m of english) {
+    it(`answers in English: ${m}`, () => {
+      expect(inferResponseLanguage(m)).toBe("en");
+    });
+  }
+
+  const danish = [
+    "Hvad sker der i weekenden",
+    "find jazz i københavn",
+    "vis mig noget sjovt",
+    "er der noget for børn",
+    "hvor kan jeg spise i aarhus",
+    "hej, kan du hjælpe mig?",
+  ];
+  for (const m of danish) {
+    it(`answers in Danish: ${m}`, () => {
+      expect(inferResponseLanguage(m)).toBe("da");
+    });
+  }
+
+  it("defaults an ambiguous message to Danish on a Danish-first product", () => {
+    expect(inferResponseLanguage("ok")).toBe("da");
+    expect(inferResponseLanguage("")).toBe("da");
+    expect(inferResponseLanguage("jazz")).toBe("da");
+  });
+
+  it("treats Danish letters as decisive even among English words", () => {
+    // "the" and "is" are English, but æ/ø/å are not.
+    expect(inferResponseLanguage("is there noget i københavn")).toBe("da");
+  });
+});

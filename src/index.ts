@@ -1045,9 +1045,28 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       ? `\n## Nuværende kontekst:\n${contextLines.map(l => `- ${l}`).join("\n")}`
       : "";
 
+    // The static prompt already says "answer in Danish unless the user writes
+    // in another language", and the model ignored it: probed live, "hello, can
+    // you help me?" and "any good jazz concerts?" both came back in Danish.
+    // A hint the model may or may not act on is not a language setting, so the
+    // decision is made here and stated as an instruction it cannot miss.
+    const replyLanguage = inferResponseLanguage(latestUserMessage(userMessages));
+    const languageNote = replyLanguage === "en"
+      ? [
+          "",
+          "## SPROG (VIGTIGST)",
+          "Brugeren skriver ENGELSK. Svar UDELUKKENDE på engelsk — hele svaret,",
+          "inklusive overskrifter og opfølgende spørgsmål. Skift ikke til dansk undervejs.",
+        ].join("\n")
+      : [
+          "",
+          "## SPROG (VIGTIGST)",
+          "Brugeren skriver DANSK. Svar udelukkende på dansk.",
+        ].join("\n");
+
     // Build the full conversation with system prompt
     const messages: ChatMessage[] = [
-      { role: "system", content: SYSTEM_PROMPT + contextNote },
+      { role: "system", content: SYSTEM_PROMPT + contextNote + languageNote },
       ...userMessages,
     ];
 
