@@ -415,3 +415,16 @@ describe("Danish compounds vs Danish town names", () => {
     }
   });
 });
+
+describe("an event word added one at a time", () => {
+  it("routes a tournament question to events", () => {
+    expect(inferDiscoveryIntent("quidditch-turneringer i Thisted").kind).toBe("events");
+  });
+
+  it("leaves every place query exactly as it was", () => {
+    // The batch widening that was reverted broke all of these.
+    for (const q of ["gode steder i Aarhus", "restauranter i Odense", "natursteder nær Frederikshavn", "museer i Roskilde"]) {
+      expect(inferDiscoveryIntent(q).kind, q).toBe("places");
+    }
+  });
+});

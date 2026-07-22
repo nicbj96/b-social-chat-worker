@@ -175,8 +175,11 @@ export function inferDiscoveryIntent(message: string, contextCity?: string): Dis
   // BOTH signals, which turned six passing tests into "both" and lost the
   // routing entirely. The bug found today was the missing boundary on the PLACE
   // signal, not a thin event vocabulary -- widening that is a separate change
-  // and needs its own evidence.
-  const eventSignal = /(event|events|koncert|festival|jazz|aktivitet|aktiviteter|weekend|i aften)\w*/iu.test(text);
+  // and needs its own evidence. "turnering" is the single exception, added
+  // after checking it in isolation: it is unambiguously an event word, and
+  // it changes exactly one of the six routing cases (the quidditch query)
+  // while leaving steder/restauranter/natursteder/museer untouched.
+  const eventSignal = /(event|events|koncert|festival|jazz|aktivitet|aktiviteter|weekend|i aften|turnering)\w*/iu.test(text);
   const kind: DiscoveryKind = placeSignal && eventSignal ? "both" : placeSignal ? "places" : eventSignal ? "events" : "both";
 
   // City aliases for DB search (KBH/Cph → København). Keep full Copenhagen match as København.
