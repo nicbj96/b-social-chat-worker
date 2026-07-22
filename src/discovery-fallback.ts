@@ -123,7 +123,13 @@ const CATEGORY_RULES = [
 export function inferDiscoveryIntent(message: string, contextCity?: string): DiscoveryIntent {
   const text = String(message || "").trim();
   const lower = text.toLocaleLowerCase("da-DK");
-  const placeSignal = /(sted|steder|park|skov|museum|restaurant|café|cafe)\w*/iu.test(text);
+  // "museer" is the Danish plural of "museum" and it changes the stem, so the
+  // trailing \w* cannot reach it the way it reaches "restauranter" or
+  // "parker". Found by the golden set on 2026-07-22: "museer i Roskilde"
+  // matched NO place signal, fell to the default kind, and "museer og events i
+  // Odense" was read as events-only -- the museums half of the question was
+  // silently dropped. Every other noun here pluralises by suffix and is fine.
+  const placeSignal = /(sted|steder|park|skov|museum|musee|museet|restaurant|café|cafe)\w*/iu.test(text);
   const eventSignal = /(event|events|koncert|festival|jazz|aktivitet|aktiviteter|weekend|i aften)\w*/iu.test(text);
   const kind: DiscoveryKind = placeSignal && eventSignal ? "both" : placeSignal ? "places" : eventSignal ? "events" : "both";
 
