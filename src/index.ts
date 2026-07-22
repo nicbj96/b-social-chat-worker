@@ -1,6 +1,11 @@
 import * as Sentry from "@sentry/cloudflare";
 import { cityToBBox } from "./city-bbox";
 import { SYSTEM_PROMPT } from "./system-prompt";
+import { promptVersion } from "./promptVersion";
+
+// Derived from the prompt text, not hand-maintained: a version somebody has
+// to remember to bump is wrong the first time anyone edits in a hurry.
+const PROMPT_VERSION = promptVersion(SYSTEM_PROMPT);
 import { TOOLS } from "./tools";
 import {
   createSupabaseClient,
@@ -1436,6 +1441,10 @@ function jsonResponse(data: any, status = 200): Response {
     status,
     headers: {
       "Content-Type": "application/json",
+      // Which prompt produced this answer. Without it, editing the prompt and
+      // redeploying makes every previous answer unattributable — "it used to
+      // say something different" stops being checkable.
+      "X-Prompt-Version": PROMPT_VERSION,
       ...CORS_HEADERS,
     },
   });
