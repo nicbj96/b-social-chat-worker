@@ -10,7 +10,8 @@
     "test": "vitest run",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
     "assert:repo-safety": "node script/assert-repo-safety.mjs",
-    "verify:local": "npm run check && npm test && npm run audit:prod && npm run assert:repo-safety"
+    "verify:local": "npm run check && npm test && npm run audit:prod && npm run assert:repo-safety",
+    "eval:chat": "node script/eval-chat.mjs"
   },
   "dependencies": {
     "@sentry/cloudflare": "^10.52.0",

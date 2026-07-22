@@ -71,9 +71,33 @@ export function isDiscoverySeekingMessage(message: string): boolean {
 }
 
 /** Placeholder / invented discovery prose without tool grounding. */
+/**
+ * True when the model wrote a TOOL CALL as prose instead of calling the tool —
+ * e.g. it answered literally `semantic_search(query="Beyoncé koncert Skagen",
+ * kind="events", city="Skagen")`. Caught by the golden-set eval on 2026-07-22,
+ * where a user asking about a concert that does not exist got that string back
+ * as their answer. It is never a legitimate reply: the user sees machine
+ * internals, and the discovery never actually ran.
+ */
+export function looksLikeRawToolCall(reply: string): boolean {
+  const text = String(reply || "").trim();
+  if (!text) return false;
+  // A tool name immediately followed by an argument list, anywhere in the text.
+  // Written as a LITERAL regex on purpose: building it from a template string
+  // turned "\b" into a backspace character and silently produced an invalid
+  // pattern (caught by the unit test below).
+  const CALLISH =
+    /\b(semantic_search|search_events|search_places|search_routes|save_user_tags|save_user_prefs|rsvp_event|save_place|send_to_team)\s*\(/i;
+  if (CALLISH.test(text)) return true;
+  // Some models emit the JSON envelope instead.
+  if (/^\s*\{\s*"(name|function|tool_call|tool)"\s*:/i.test(text)) return true;
+  return false;
+}
+
 export function looksUngroundedDiscoveryReply(reply: string): boolean {
   const text = String(reply || "");
   if (!text.trim()) return false;
+  if (looksLikeRawToolCall(text)) return true;
   if (/\(\s*search result\s*\)/i.test(text)) return true;
   if (/\b(placeholder|lorem ipsum|TODO|\[result\])\b/i.test(text)) return true;
   // Claims to have found things with no concrete place/event bullet lines.

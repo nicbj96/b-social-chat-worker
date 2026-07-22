@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   claimsEmptyDiscovery,
+  looksLikeRawToolCall,
   formatFallbackReply,
   inferDiscoveryIntent,
   inferResponseLanguage,
@@ -171,5 +172,28 @@ describe("repairContradictoryGroundedReply", () => {
         "da",
       ),
     ).toBe(reply);
+  });
+});
+
+describe("raw tool call leaking into the reply", () => {
+  // Found by the golden-set eval (script/eval-chat.mjs) on 2026-07-22: asked
+  // about a Beyoncé concert that does not exist, the model answered with the
+  // literal string `semantic_search(query="Beyoncé koncert Skagen tirsdag",
+  // kind="events", city="Skagen")`. The user saw machine internals, and the
+  // discovery never ran.
+  it("detects a tool call written as prose", () => {
+    expect(looksLikeRawToolCall('semantic_search(query="Beyoncé koncert Skagen", kind="events")')).toBe(true);
+    expect(looksLikeRawToolCall("search_places(city='Aarhus')")).toBe(true);
+    expect(looksLikeRawToolCall('{"name": "search_events", "arguments": {}}')).toBe(true);
+  });
+
+  it("does not flag a normal answer that merely names something", () => {
+    expect(looksLikeRawToolCall("Der er ingen Beyoncé-koncert i Skagen på tirsdag.")).toBe(false);
+    expect(looksLikeRawToolCall("Her er hvad jeg fandt: • Jazz i Aalborg — 14/8")).toBe(false);
+    expect(looksLikeRawToolCall("")).toBe(false);
+  });
+
+  it("routes such a reply into the grounded fallback", () => {
+    expect(looksUngroundedDiscoveryReply('semantic_search(query="x")')).toBe(true);
   });
 });
