@@ -162,6 +162,10 @@ export async function searchPlaces(
       name: p.name,
       description: p.description,
       city: p.city,
+      // Carried through so the reply can say "nær Roskilde" instead of "by ikke
+      // angivet" for a place located via the derived column. Selecting it and
+      // then dropping it here is why the first attempt changed nothing.
+      nearest_city: p.nearest_city,
       region: p.region,
       categories: p.main_categories?.join(", "),
       tags: p.tags?.join(", "),
