@@ -17,7 +17,7 @@ import { sendWebPush, type PushMessage } from "./webpush";
 import { isSafeEntityId, isValidUuid, clampString, clampNumber } from "./validate";
 import { guardedFetch } from "./fetchguard";
 import { enforceRateLimit, type RateLimitEnv } from "./ratelimit";
-import { formatFallbackReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, repairContradictoryGroundedReply } from "./discovery-fallback";
+import { aiBreakerIsOpen, formatFallbackReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 
 export { RateLimitDurableObject } from "./rate-limit-do";
 
@@ -1089,6 +1089,14 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       ...userMessages,
     ];
 
+    // Breaker: once the AI has failed repeatedly, calling it again only spends
+    // the reader's patience on a timeout we already expect. Go straight to the
+    // grounded database answer.
+    if (aiBreakerIsOpen()) {
+      console.error(JSON.stringify({ event: "ai_breaker_open", action: "direct_fallback" }));
+      return await directDiscoveryFallback(env, userMessages, ctx);
+    }
+
     // First AI call — may include tool calls
     let aiResponse: any;
     try {
@@ -1098,9 +1106,17 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
         tool_choice: "auto",
       });
     } catch (error) {
-      if (isAiQuotaError(error)) return directDiscoveryFallback(env, userMessages, ctx);
-      throw error;
+      // ANY AI failure falls back, not just a quota error. The database answer
+      // is grounded and useful; rethrowing gave the reader nothing at all.
+      recordAiFailure();
+      console.error(JSON.stringify({
+        event: "ai_call_failed",
+        quota: isAiQuotaError(error),
+        detail: String(error instanceof Error ? error.message : error).slice(0, 140),
+      }));
+      return directDiscoveryFallback(env, userMessages, ctx);
     }
+    recordAiSuccess();
 
     // If the model wants to call tools, execute them
     if (aiResponse.tool_calls && aiResponse.tool_calls.length > 0) {
@@ -1373,8 +1389,15 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
           messages,
         });
       } catch (error) {
-        if (isAiQuotaError(error)) return directDiscoveryFallback(env, userMessages, ctx);
-        throw error;
+        // Same rule as the first call: any failure falls back to grounded
+        // database results rather than giving the reader nothing.
+        recordAiFailure();
+        console.error(JSON.stringify({
+          event: "ai_followup_failed",
+          quota: isAiQuotaError(error),
+          detail: String(error instanceof Error ? error.message : error).slice(0, 140),
+        }));
+        return directDiscoveryFallback(env, userMessages, ctx);
       }
 
       // Collect tag slugs from tool arguments (for live filter update on frontend)

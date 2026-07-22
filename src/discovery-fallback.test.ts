@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   claimsEmptyDiscovery,
   looksLikeRawToolCall,
   formatFallbackReply,
+  aiBreakerIsOpen,
+  recordAiFailure,
+  recordAiSuccess,
+  __resetAiBreaker,
   inferDiscoveryIntent,
   inferResponseLanguage,
   isAiQuotaError,
@@ -511,5 +515,52 @@ describe("formatFallbackReply: both-kind budget", () => {
     const intent = inferDiscoveryIntent("museer og koncerter i København");
     const out = formatFallbackReply(intent, [] as never, mkEvents(10) as never, "da");
     expect(out.event_ids.length).toBe(intent.limit);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AI circuit breaker.
+//
+// Two problems, and the first was the bigger one: only a QUOTA error fell back.
+// Any other AI failure -- model unavailable, timeout, 5xx -- was rethrown and
+// the whole chat request failed, even though the database fallback would have
+// produced a real grounded answer. The safety net existed and was wired to one
+// kind of rope.
+// ---------------------------------------------------------------------------
+describe("aiBreaker", () => {
+  beforeEach(() => __resetAiBreaker());
+
+  it("stays closed while the AI is healthy", () => {
+    expect(aiBreakerIsOpen()).toBe(false);
+  });
+
+  it("stays closed below the threshold — one blip is not an outage", () => {
+    recordAiFailure();
+    recordAiFailure();
+    expect(aiBreakerIsOpen()).toBe(false);
+  });
+
+  it("opens on sustained failure", () => {
+    recordAiFailure();
+    recordAiFailure();
+    recordAiFailure();
+    expect(aiBreakerIsOpen()).toBe(true);
+  });
+
+  it("closes again after the cooldown, so an outage is not permanent", () => {
+    const t0 = 1_000_000;
+    recordAiFailure(t0); recordAiFailure(t0); recordAiFailure(t0);
+    expect(aiBreakerIsOpen(t0 + 1_000)).toBe(true);
+    expect(aiBreakerIsOpen(t0 + 61_000)).toBe(false);
+  });
+
+  it("a success closes it immediately and resets the count", () => {
+    recordAiFailure(); recordAiFailure(); recordAiFailure();
+    expect(aiBreakerIsOpen()).toBe(true);
+    recordAiSuccess();
+    expect(aiBreakerIsOpen()).toBe(false);
+    // And the counter really reset: two more failures must not reopen it.
+    recordAiFailure(); recordAiFailure();
+    expect(aiBreakerIsOpen()).toBe(false);
   });
 });

@@ -470,3 +470,50 @@ export function repairContradictoryGroundedReply(
     language,
   ).reply;
 }
+
+// ── Circuit breaker for the AI dependency ───────────────────────────────────
+//
+// Two separate problems, and the first is the bigger one.
+//
+// 1. Only a QUOTA error fell back. Any other AI failure -- model unavailable,
+//    timeout, 5xx -- was rethrown and the whole chat request failed, even
+//    though directDiscoveryFallback() would have produced a real, grounded
+//    answer from the database. The safety net existed and was wired to one
+//    kind of rope.
+//
+// 2. During an outage every request still paid the full AI timeout before
+//    failing. The breaker skips the call once the dependency has clearly gone,
+//    so a reader gets database results immediately instead of waiting.
+//
+// Module-level state, same caveat as the request counter: safe because an
+// isolate handles requests sequentially enough for a counter, and it degrades
+// to "slightly late" rather than "wrong" if that ever stops being true.
+const AI_FAILURE_THRESHOLD = 3;
+const AI_BREAKER_COOLDOWN_MS = 60_000;
+
+let aiConsecutiveFailures = 0;
+let aiBreakerOpenUntil = 0;
+
+/** True when the AI has failed enough that calling it again is just latency. */
+export function aiBreakerIsOpen(now = Date.now()): boolean {
+  return now < aiBreakerOpenUntil;
+}
+
+export function recordAiFailure(now = Date.now()): void {
+  aiConsecutiveFailures += 1;
+  if (aiConsecutiveFailures >= AI_FAILURE_THRESHOLD) {
+    aiBreakerOpenUntil = now + AI_BREAKER_COOLDOWN_MS;
+  }
+}
+
+/** One success closes it. A half-open probe that works means the outage ended. */
+export function recordAiSuccess(): void {
+  aiConsecutiveFailures = 0;
+  aiBreakerOpenUntil = 0;
+}
+
+/** Test seam only. */
+export function __resetAiBreaker(): void {
+  aiConsecutiveFailures = 0;
+  aiBreakerOpenUntil = 0;
+}
