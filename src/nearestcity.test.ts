@@ -5,10 +5,10 @@ import { searchPlaces } from "./supabase-queries";
 // filtering on `city` alone made four fifths of the catalogue unreachable by any
 // city search. These assert the query asks for both columns.
 function fakeSupabase() {
-  const calls: { or?: string; ilike?: [string, string]; select?: string } = {};
+  const calls: { or?: string; ilike?: [string, string]; select?: string; orders: [string, unknown][] } = { orders: [] };
   const q: any = {
     select: (cols: string) => { calls.select = cols; return q; },
-    order: () => q,
+    order: (col: string, opts?: unknown) => { calls.orders.push([col, opts]); return q; },
     limit: () => q,
     contains: () => q,
     ilike: (col: string, val: string) => { calls.ilike = [col, val]; return q; },
@@ -38,5 +38,37 @@ describe("searchPlaces city matching", () => {
     await searchPlaces(client as any, { city: "Aar,hus)(%" } as any);
     expect(calls.or).not.toContain(",nearest_city.ilike.%Aar,");
     expect(calls.or).toContain("Aarhus");
+  });
+});
+
+// Only 2.3% of places carry a rating, and Postgres sorts NULLs FIRST on a DESC
+// order -- so this query was returning 144,739 unrated places ahead of every
+// rated one, in arbitrary order.
+describe("searchPlaces ordering", () => {
+  it("puts unrated places LAST, not first", async () => {
+    const { client, calls } = fakeSupabase();
+    await searchPlaces(client as any, {} as any);
+    const rating = calls.orders.find(([c]) => c === "rating_avg");
+    expect(rating, "expected an order on rating_avg").toBeTruthy();
+    expect((rating![1] as { nullsFirst?: boolean })?.nullsFirst).toBe(false);
+  });
+
+  it("breaks the 97.7% tie with quality_score, not arbitrary order", () => {
+    // quality_score correlates with having real content: the 85+ band is 81%
+    // described, the 60-64 band is 0% described.
+    const { client, calls } = fakeSupabase();
+    return searchPlaces(client as any, {} as any).then(() => {
+      const cols = calls.orders.map(([c]) => c);
+      expect(cols).toContain("quality_score");
+      // Rating must still win where it exists.
+      expect(cols.indexOf("rating_avg")).toBeLessThan(cols.indexOf("quality_score"));
+    });
+  });
+
+  it("does not let quality_score bring NULLs to the front either", async () => {
+    const { client, calls } = fakeSupabase();
+    await searchPlaces(client as any, {} as any);
+    const q = calls.orders.find(([c]) => c === "quality_score");
+    expect((q![1] as { nullsFirst?: boolean })?.nullsFirst).toBe(false);
   });
 });

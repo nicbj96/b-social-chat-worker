@@ -120,7 +120,19 @@ export async function searchPlaces(
   let query = supabase
     .from("places")
     .select("id, name, description, city, nearest_city, region, main_categories, tags, smart_tags, rating_avg, metadata")
-    .order("rating_avg", { ascending: false })
+    // NULLS LAST is the whole point. Only 2.3% of places carry a rating
+    // (3,336 of 148,075), and Postgres sorts NULLs FIRST on a DESC order -- so
+    // this was returning 144,739 unrated places ahead of every rated one, in
+    // arbitrary order. That is how "camping niffer — tozeur" and "Bush camp
+    // White Desert" reached the top of a Danish search.
+    .order("rating_avg", { ascending: false, nullsFirst: false })
+    // Secondary: among the 97.7% with no rating, prefer the ones we can
+    // actually describe. quality_score correlates strongly with having real
+    // content -- places scoring 85+ are 81% described and 77% imaged, while the
+    // 60-64 band (76,290 of them, half the catalogue) is 0% described and 28%
+    // imaged. Showing a reader a place we know nothing about is the worse
+    // answer even when neither has a rating.
+    .order("quality_score", { ascending: false, nullsFirst: false })
     .limit(8);
 
   if (args.city) {
