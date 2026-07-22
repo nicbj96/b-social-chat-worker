@@ -660,7 +660,10 @@ async function handleEmbed(request: Request, env: Env): Promise<Response> {
     const embeddings = result?.data ?? [];
     return jsonResponse({ embeddings, count: embeddings.length, dim: embeddings[0]?.length ?? 0 });
   } catch (err: any) {
-    return jsonResponse({ error: "embed failed", details: err.message }, 500);
+    // Public endpoint: the exception text goes to the log, never to the caller.
+    // See the /chat handler for what this used to hand out.
+    console.error("Embed error:", err);
+    return jsonResponse({ error: "embed failed" }, 500);
   }
 }
 
@@ -732,7 +735,9 @@ async function handleSemanticSearch(request: Request, env: Env): Promise<Respons
     }
     return jsonResponse(out);
   } catch (err: any) {
-    return jsonResponse({ error: "search failed", details: err.message }, 500);
+    // Public endpoint: the exception text goes to the log, never to the caller.
+    console.error("Search error:", err);
+    return jsonResponse({ error: "search failed" }, 500);
   }
 }
 
@@ -928,7 +933,16 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       };
     };
     try {
-      const parsed: unknown = await request.json();
+      // Measure the body we ACTUALLY received, not the one the caller claimed.
+      // The content-length check above is a cheap early exit for honest
+      // clients; it is not a limit, because a caller can omit the header or use
+      // chunked encoding and walk straight past it. A red-team test on
+      // 2026-07-22 pushed 300KB through a 256KB "cap" doing exactly that.
+      const raw = await request.text();
+      if (raw.length > MAX_BODY_BYTES) {
+        return jsonResponse({ error: "payload for stor" }, 400);
+      }
+      const parsed: unknown = JSON.parse(raw);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
         return jsonResponse({ error: "Ugyldig forespørgsel" }, 400);
       }
@@ -1406,11 +1420,13 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       suggested_tag_slugs: [],
     });
   } catch (err: any) {
+    // NEVER return err.message here. /chat is unauthenticated, and the raw
+    // exception text carries whatever the failure touched -- a red-team test on
+    // 2026-07-22 got the Supabase service-role key, an internal IP and a port
+    // back in `details` from a single forced error. The log keeps the detail;
+    // the caller gets the sentence.
     console.error("Chat error:", err);
-    return jsonResponse(
-      { error: "Noget gik galt. Prøv igen.", details: err.message },
-      500
-    );
+    return jsonResponse({ error: "Noget gik galt. Prøv igen." }, 500);
   }
 }
 
