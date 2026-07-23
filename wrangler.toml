@@ -20,8 +20,19 @@ class_name = "RateLimitDurableObject"
 tag = "v1-rate-limiter"
 new_sqlite_classes = ["RateLimitDurableObject"]
 
+# Retain logs (Workers Logs) so the abuse trail is reviewable in the dashboard,
+# not just via live `wrangler tail`. Every 429 emits a structured
+# {event:"rate_limit_hit", actor_prefix, bucket, path} line — this is what makes
+# abuse monitoring answerable with no credential. head_sampling_rate=1 keeps all.
+[observability]
+enabled = true
+head_sampling_rate = 1
+
 # Secrets (set via `npx wrangler secret put <NAME>`):
-#   SUPABASE_KEY      — Supabase anon or service_role key
+#   SUPABASE_KEY         — Supabase anon key (used for all normal reads)
+#   SUPABASE_SERVICE_KEY — OPTIONAL service_role key. If set, the rate_limit_events
+#                          abuse table (and rate_limit_offenders view) populate too;
+#                          if unset, abuse is still reviewable in Workers Logs above.
 #   VAPID_PUBLIC_KEY  — Web Push public key
 #   VAPID_PRIVATE_KEY — Web Push private key (d parameter)
 #   VAPID_SUBJECT     — mailto:... contact for push services

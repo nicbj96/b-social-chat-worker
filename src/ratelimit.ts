@@ -27,6 +27,11 @@ export interface RateLimitEnv {
   RATE_LIMITER?: DurableObjectNamespace<RateLimitDurableObject>;
   SUPABASE_URL?: string;
   SUPABASE_KEY?: string;
+  // rate_limit_events grants INSERT to service_role only (anon-write on an abuse
+  // log would let anyone spam it). The rest of the worker uses the anon key with
+  // per-user JWTs; the abuse-log write is the one place that needs service_role,
+  // so it gets its own binding rather than elevating SUPABASE_KEY everywhere.
+  SUPABASE_SERVICE_KEY?: string;
 }
 
 /**
@@ -50,18 +55,34 @@ async function recordRateLimitHit(
   bucket: RateLimitBucket,
   pathname: string,
 ): Promise<void> {
-  if (!env.SUPABASE_URL || !env.SUPABASE_KEY) return;
+  // Opaque actor prefix: first 12 hex chars of sha256(path||IP). Same value the
+  // DB stores (privacy-reviewed) -- NOT a raw address, so it is safe to log.
+  const actorPrefix = key.replace(/^v1:/, "").slice(0, 12);
+
+  // ALWAYS emit a structured trail line, independent of the Supabase write. This
+  // is the answer to "is anyone abusing this": every 429 is now reviewable in
+  // Cloudflare Workers Logs (tail + retained observability) with zero credential
+  // required. The rate_limit_events INSERT below is the richer, queryable store
+  // (feeds rate_limit_offenders) and lights up the moment a service_role key is
+  // set -- but abuse is reviewable NOW, from the worker's own logs.
+  console.log(JSON.stringify({ event: "rate_limit_hit", actor_prefix: actorPrefix, bucket, path: pathname }));
+
+  // Prefer the service_role key (granted INSERT on rate_limit_events); fall back
+  // to the anon key so the worker degrades to "logs loudly" rather than crashing
+  // if the secret is not set yet.
+  const writeKey = env.SUPABASE_SERVICE_KEY || env.SUPABASE_KEY;
+  if (!env.SUPABASE_URL || !writeKey) return;
   try {
     const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rate_limit_events`, {
       method: "POST",
       headers: {
-        apikey: env.SUPABASE_KEY,
-        Authorization: `Bearer ${env.SUPABASE_KEY}`,
+        apikey: writeKey,
+        Authorization: `Bearer ${writeKey}`,
         "Content-Type": "application/json",
         Prefer: "return=minimal",
       },
       body: JSON.stringify({
-        actor_prefix: key.replace(/^v1:/, "").slice(0, 12),
+        actor_prefix: actorPrefix,
         bucket,
         path: pathname,
       }),
