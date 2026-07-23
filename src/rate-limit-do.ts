@@ -7,11 +7,11 @@ export interface DurableRateLimitDecision {
 }
 
 export class RateLimitDurableObject extends DurableObject {
-  async consume(limit: number, windowMs: number): Promise<DurableRateLimitDecision> {
+  async consume(limit: number, windowMs: number, weight = 1): Promise<DurableRateLimitDecision> {
     const now = Date.now();
     return this.ctx.storage.transaction(async (transaction) => {
       const current = await transaction.get<RateLimitWindow>("window");
-      const decision = advanceRateLimitWindow(current, limit, windowMs, now);
+      const decision = advanceRateLimitWindow(current, limit, windowMs, now, weight);
       await transaction.put("window", decision.window);
       return {
         success: decision.success,

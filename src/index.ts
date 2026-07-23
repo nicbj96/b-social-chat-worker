@@ -16,7 +16,7 @@ import {
 import { sendWebPush, type PushMessage } from "./webpush";
 import { isSafeEntityId, isValidUuid, clampString, clampNumber } from "./validate";
 import { guardedFetch } from "./fetchguard";
-import { enforceRateLimit, type RateLimitEnv } from "./ratelimit";
+import { enforceRateLimit, enforceAiDailyBudget, type RateLimitEnv } from "./ratelimit";
 import { runAiCounted, aiCostSnapshot } from "./aiCost";
 import { aiBreakerIsOpen, formatFallbackReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 
@@ -72,6 +72,11 @@ const worker = {
     // before body parsing, authorization work, database calls, or model usage.
     const rateLimitResponse = await enforceRateLimit(request, env, url.pathname, CORS_HEADERS);
     if (rateLimitResponse) return rateLimitResponse;
+
+    // Global daily AI spend ceiling (aggregate neuron budget across all actors,
+    // which the per-actor velocity limit above cannot see). Fail-open.
+    const aiBudgetResponse = await enforceAiDailyBudget(request, env, url.pathname, CORS_HEADERS);
+    if (aiBudgetResponse) return aiBudgetResponse;
 
     if (url.pathname === "/chat" && request.method === "POST") {
       return handleChat(request, env, ctx);

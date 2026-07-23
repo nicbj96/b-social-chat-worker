@@ -14,12 +14,16 @@ export function advanceRateLimitWindow(
   limit: number,
   windowMs: number,
   now: number,
+  weight = 1,
 ): RateLimitDecision {
   const window = !current || current.resetAt <= now
     ? { count: 0, resetAt: now + windowMs }
     : { ...current };
 
-  window.count += 1;
+  // weight defaults to 1 (one request = one unit — the per-actor rate limiter's
+  // behaviour, unchanged). A cost ceiling passes the call's estimated neuron
+  // cost so an image generation counts far more than a chat turn.
+  window.count += weight;
   return {
     window,
     success: window.count <= limit,

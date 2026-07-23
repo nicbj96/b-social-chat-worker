@@ -158,3 +158,60 @@ export async function enforceRateLimit(
     return consumeLocalBudget(key, bucket) ? null : blocked();
   }
 }
+
+// ── Global daily AI cost ceiling ──
+//
+// The per-actor limiter above caps VELOCITY (30 public-AI req/min per IP) but not
+// cumulative daily SPEND: many actors each under 30/min still sum to unbounded
+// neurons over a day, and Cloudflare bills in neurons (10.000/day free). This
+// caps the aggregate. Weight is each route's estimated neuron cost (from
+// aiCost.ts's published rates), consumed against ONE global daily window, so an
+// image route would count far more than a chat turn — a DKK ceiling in the only
+// unit the platform exposes (env.AI.run returns no token/usage; see aiCost.ts).
+//
+// FAIL-OPEN by contract (CLAUDE.md): a budget-store outage must never take chat
+// down. On any Durable Object error, or with no limiter bound, the request
+// proceeds — the per-actor limiter still applies, and the ceiling is a secondary
+// backstop, not the primary gate.
+const ROUTE_NEURONS: Record<string, number> = {
+  "/chat": 58,   // llama-4-scout (~55) + the query embedding (~3)
+  "/search": 6,  // embedding-driven
+  "/embed": 3,
+};
+const DAY_MS = 86_400_000;
+const DEFAULT_DAILY_NEURON_BUDGET = 40_000; // ~4x the 10k/day free tier: a runaway catch, not a throttle
+
+export interface AiBudgetEnv extends RateLimitEnv {
+  AI_DAILY_NEURON_BUDGET?: string;
+}
+
+export async function enforceAiDailyBudget(
+  request: Request,
+  env: AiBudgetEnv,
+  pathname: string,
+  corsHeaders: Record<string, string>,
+): Promise<Response | null> {
+  if (request.method !== "POST" || !PUBLIC_AI_ROUTES.has(pathname)) return null;
+  if (!env.RATE_LIMITER) return null; // no global store — fail open (per-actor limit still guards)
+
+  const cap = Number(env.AI_DAILY_NEURON_BUDGET) > 0
+    ? Number(env.AI_DAILY_NEURON_BUDGET)
+    : DEFAULT_DAILY_NEURON_BUDGET;
+  const weight = ROUTE_NEURONS[pathname] ?? 30;
+
+  try {
+    const stub = env.RATE_LIMITER.getByName("global:ai-neurons-daily");
+    const decision = await stub.consume(cap, DAY_MS, weight);
+    if (decision.success) return null;
+    return new Response(
+      JSON.stringify({ error: "ai_budget_exhausted", retry_after_seconds: decision.retryAfterSeconds }),
+      {
+        status: 429,
+        headers: { "Content-Type": "application/json", "Retry-After": String(decision.retryAfterSeconds), ...corsHeaders },
+      },
+    );
+  } catch {
+    console.error(JSON.stringify({ event: "ai_daily_budget_unavailable", pathname, fallback: "allow" }));
+    return null; // fail-open: never take chat down for a budget-store outage
+  }
+}

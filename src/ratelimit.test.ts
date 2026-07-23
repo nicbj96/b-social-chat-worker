@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { enforceRateLimit, rateLimitActorKey, rateLimitBucketFor } from "./ratelimit";
+import { enforceAiDailyBudget, enforceRateLimit, rateLimitActorKey, rateLimitBucketFor } from "./ratelimit";
 
 describe("rateLimitBucketFor", () => {
   it("classifies expensive POST routes and leaves safe routes unlimited", () => {
@@ -157,5 +157,60 @@ describe("rate limit abuse logging", () => {
     let last: Response | null = null;
     for (let i = 0; i < 40; i++) last = await enforceRateLimit(post("198.51.100.4"), {}, "/chat", CORS);
     expect(last?.status).toBe(429);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Global daily AI cost ceiling. Distinct from the per-actor velocity limit: it
+// consumes each route's estimated NEURON cost against one global daily window,
+// and it fails OPEN so a budget-store outage never takes chat down.
+// ---------------------------------------------------------------------------
+describe("enforceAiDailyBudget", () => {
+  const CORS = { "Access-Control-Allow-Origin": "https://b-social.net" };
+  const post = (path = "/chat") =>
+    new Request(`https://w.test${path}`, { method: "POST", headers: { "CF-Connecting-IP": "203.0.113.9" } });
+
+  it("consumes ONE global daily key, weighted by the route's neuron cost, and passes under budget", async () => {
+    const calls: Array<{ key: string; args: unknown[] }> = [];
+    const env = {
+      RATE_LIMITER: {
+        getByName: (key: string) => ({
+          consume: async (...args: unknown[]) => { calls.push({ key, args }); return { success: true, retryAfterSeconds: 1 }; },
+        }),
+      },
+    } as any;
+    expect(await enforceAiDailyBudget(post("/chat"), env, "/chat", CORS)).toBeNull();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].key).toBe("global:ai-neurons-daily");
+    expect(calls[0].args[0]).toBe(40_000); // default cap
+    expect(calls[0].args[2]).toBe(58);     // /chat neuron weight (> /embed's 3)
+  });
+
+  it("returns a 429 ai_budget_exhausted when the global budget is spent", async () => {
+    const env = { RATE_LIMITER: { getByName: () => ({ consume: async () => ({ success: false, retryAfterSeconds: 3600 }) }) } } as any;
+    const res = await enforceAiDailyBudget(post("/chat"), env, "/chat", CORS);
+    expect(res?.status).toBe(429);
+    expect(res?.headers.get("Retry-After")).toBe("3600");
+    expect(res?.headers.get("Access-Control-Allow-Origin")).toBe("https://b-social.net");
+    expect(await res?.json()).toEqual({ error: "ai_budget_exhausted", retry_after_seconds: 3600 });
+  });
+
+  it("fails OPEN — no limiter, a DO error, and non-AI routes all proceed", async () => {
+    expect(await enforceAiDailyBudget(post("/chat"), {} as any, "/chat", CORS)).toBeNull();
+    const throwEnv = { RATE_LIMITER: { getByName: () => ({ consume: async () => { throw new Error("DO down"); } }) } } as any;
+    expect(await enforceAiDailyBudget(post("/chat"), throwEnv, "/chat", CORS)).toBeNull();
+    // /push/send is not a public-AI route, so the AI budget must not touch it.
+    const spentEnv = { RATE_LIMITER: { getByName: () => ({ consume: async () => ({ success: false, retryAfterSeconds: 1 }) }) } } as any;
+    expect(await enforceAiDailyBudget(post("/push/send"), spentEnv, "/push/send", CORS)).toBeNull();
+  });
+
+  it("honours a configured AI_DAILY_NEURON_BUDGET cap", async () => {
+    const seenCaps: number[] = [];
+    const env = {
+      AI_DAILY_NEURON_BUDGET: "12345",
+      RATE_LIMITER: { getByName: () => ({ consume: async (cap: number) => { seenCaps.push(cap); return { success: true, retryAfterSeconds: 1 }; } }) },
+    } as any;
+    await enforceAiDailyBudget(post("/embed"), env, "/embed", CORS);
+    expect(seenCaps[0]).toBe(12345);
   });
 });
