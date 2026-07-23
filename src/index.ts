@@ -154,11 +154,15 @@ const worker = {
   // Scheduled jobs (configured in wrangler.toml crons):
   //   "0 17 * * 5" (Fri 17:00) → weekly push digest
   //   "0 6 * * 1"  (Mon 06:00) → trigger the ad-pack robot in the dashboard
+  //   "0 7 * * 3"  (Wed 07:00) → trigger the partner-finder robot
+  //   "0 7 * * 4"  (Thu 07:00) → trigger the source-discovery robot
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     if (controller.cron === "0 6 * * 1") {
       ctx.waitUntil(callRobot(env, "adpack").then(() => {}));
     } else if (controller.cron === "0 7 * * 3") {
       ctx.waitUntil(callRobot(env, "partners").then(() => {}));
+    } else if (controller.cron === "0 7 * * 4") {
+      ctx.waitUntil(callRobot(env, "sources").then(() => {}));
     } else {
       ctx.waitUntil(runWeeklyDigest(env));
     }
