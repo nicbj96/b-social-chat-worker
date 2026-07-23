@@ -156,6 +156,7 @@ const worker = {
   //   "0 6 * * 1"  (Mon 06:00) → trigger the ad-pack robot in the dashboard
   //   "0 7 * * 3"  (Wed 07:00) → trigger the partner-finder robot
   //   "0 7 * * 4"  (Thu 07:00) → trigger the source-discovery robot
+  //   "0 7 * * 5"  (Fri 07:00) → trigger the data-quality scan robot
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     if (controller.cron === "0 6 * * 1") {
       ctx.waitUntil(callRobot(env, "adpack").then(() => {}));
@@ -163,6 +164,8 @@ const worker = {
       ctx.waitUntil(callRobot(env, "partners").then(() => {}));
     } else if (controller.cron === "0 7 * * 4") {
       ctx.waitUntil(callRobot(env, "sources").then(() => {}));
+    } else if (controller.cron === "0 7 * * 5") {
+      ctx.waitUntil(callRobot(env, "quality").then(() => {}));
     } else {
       ctx.waitUntil(runWeeklyDigest(env));
     }
