@@ -44,4 +44,4 @@ head_sampling_rate = 1
 #   Mon 06:00 UTC → ad-pack robot (drafts 3 ads from the week's best events → queue)
 #   Wed 07:00 UTC → partner-finder robot (top venues → outreach target list → queue)
 [triggers]
-crons = ["0 17 * * 5", "0 6 * * 1", "0 7 * * 3", "0 7 * * 4", "0 7 * * 5"]
+crons = ["0 17 * * 5", "0 6 * * 1", "0 7 * * 3", "0 7 * * 4"]

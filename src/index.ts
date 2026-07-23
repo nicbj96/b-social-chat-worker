@@ -155,17 +155,17 @@ const worker = {
   //   "0 17 * * 5" (Fri 17:00) → weekly push digest
   //   "0 6 * * 1"  (Mon 06:00) → trigger the ad-pack robot in the dashboard
   //   "0 7 * * 3"  (Wed 07:00) → trigger the partner-finder robot
-  //   "0 7 * * 4"  (Thu 07:00) → trigger the source-discovery robot
-  //   "0 7 * * 5"  (Fri 07:00) → trigger the data-quality scan robot
+  //   "0 7 * * 4"  (Thu 07:00) → source-discovery + data-quality scan robots
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     if (controller.cron === "0 6 * * 1") {
       ctx.waitUntil(callRobot(env, "adpack").then(() => {}));
     } else if (controller.cron === "0 7 * * 3") {
       ctx.waitUntil(callRobot(env, "partners").then(() => {}));
     } else if (controller.cron === "0 7 * * 4") {
-      ctx.waitUntil(callRobot(env, "sources").then(() => {}));
-    } else if (controller.cron === "0 7 * * 5") {
-      ctx.waitUntil(callRobot(env, "quality").then(() => {}));
+      // Two independent read-only scouts share Thursday's tick — the Workers
+      // cron-trigger budget is limited (a 5th trigger is rejected) and both just
+      // queue a draft, so one cron firing both is the right trade.
+      ctx.waitUntil(Promise.all([callRobot(env, "sources"), callRobot(env, "quality")]).then(() => {}));
     } else {
       ctx.waitUntil(runWeeklyDigest(env));
     }
