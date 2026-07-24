@@ -1293,6 +1293,35 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                   break;
                 }
 
+                // Save a shareable plan (item 703). Login-gated (writes with the
+                // user's JWT under RLS). Uses the events the AI passes, or falls back
+                // to the events surfaced in THIS conversation. Returns a public link.
+                case "save_plan": {
+                  if (!userId || !userJwt) { result = { error: "Du skal være logget ind for at gemme og dele en plan" }; break; }
+                  try {
+                    const title = clampString(String(fnArgs.title ?? "Min aften-plan"), 120) || "Min aften-plan";
+                    const note = fnArgs.note ? clampString(String(fnArgs.note), 500) : null;
+                    let ids: string[] = Array.isArray(fnArgs.event_ids)
+                      ? fnArgs.event_ids.filter((x: unknown): x is string => typeof x === "string" && isValidUuid(x))
+                      : [];
+                    if (ids.length === 0) ids = collectedEventIds.filter((x) => isValidUuid(x));
+                    ids = [...new Set(ids)].slice(0, 20);
+                    if (ids.length === 0) { result = { error: "Ingen events at gemme endnu — find nogle events først, så laver jeg en plan" }; break; }
+                    const insertRes = await fetch(`${env.SUPABASE_URL}/rest/v1/shared_plans`, {
+                      method: "POST",
+                      headers: { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${userJwt}`, "Content-Type": "application/json", Prefer: "return=representation" },
+                      body: JSON.stringify({ title, note, event_ids: ids, created_by: userId }),
+                    });
+                    if (!insertRes.ok) { result = { error: "Kunne ikke gemme planen lige nu" }; break; }
+                    const rows = (await insertRes.json()) as Array<{ id?: string }>;
+                    const planId = rows?.[0]?.id;
+                    result = planId
+                      ? { ok: true, plan_id: planId, share_url: `https://b-social.net/plan/${planId}`, event_count: ids.length }
+                      : { error: "Kunne ikke gemme planen lige nu" };
+                  } catch (e: any) { result = { error: "Kunne ikke gemme planen", details: String(e.message || e) }; }
+                  break;
+                }
+
           // ── Write tools (JWT-baseret, RLS-sikrede) ──────────────────────
           case "save_user_tags": {
             if (!userId || !userJwt) { result = { error: "Du skal være logget ind for at gemme dette" }; break; }

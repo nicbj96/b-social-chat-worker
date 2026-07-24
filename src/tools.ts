@@ -275,6 +275,27 @@ export const TOOLS = [
       },
     },
   },
+  {
+    type: "function" as const,
+    function: {
+      name: "save_plan",
+      description:
+        "Gem en aften-plan (de events I lige har fundet, i rækkefølge) som brugeren kan DELE via et link. Kald dette når brugeren siger 'gem planen', 'del det her', 'lav et link til det', 'send det til mine venner'. Kræver login. Returnér share_url'en til brugeren i ren tekst (ingen markdown-link).",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Kort titel på planen, fx 'Fredag aften i Aarhus'" },
+          note: { type: "string", description: "Valgfri kort beskrivelse af planen" },
+          event_ids: {
+            type: "array",
+            items: { type: "string" },
+            description: "Event-ID'er der skal med i planen (i rækkefølge). Udelad for at bruge de events I lige har talt om.",
+          },
+        },
+        required: ["title"],
+      },
+    },
+  },
 ];
 
 export type ToolCallArgs = {
