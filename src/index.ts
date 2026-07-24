@@ -18,7 +18,7 @@ import { isSafeEntityId, isValidUuid, clampString, clampNumber } from "./validat
 import { guardedFetch } from "./fetchguard";
 import { fetchWeather, haversineKm, estimateTravelMinutes, normalizeMode, isValidLatLng } from "./context-tools";
 import { enforceRateLimit, enforceAiDailyBudget, type RateLimitEnv } from "./ratelimit";
-import { runAiCounted, aiCostSnapshot } from "./aiCost";
+import { runAiCounted, aiCostSnapshot, setAiUsageReporter } from "./aiCost";
 import { aiBreakerIsOpen, formatFallbackReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 
 export { RateLimitDurableObject } from "./rate-limit-do";
@@ -68,6 +68,27 @@ const worker = {
 
     // Parse the URL
     const url = new URL(request.url);
+
+    // Persist AI usage per CALL so the day's neuron spend survives the isolate
+    // (workplan 1111). The in-memory counters are per-isolate, so only a per-call
+    // write gives the DB a true daily total to divide by active users.
+    // Strictly fire-and-forget: never blocks the response, and a failed write
+    // loses a telemetry increment rather than breaking a chat answer.
+    setAiUsageReporter((model, neurons) => {
+      ctx.waitUntil(
+        fetch(`${env.SUPABASE_URL}/rest/v1/rpc/record_ai_call`, {
+          method: "POST",
+          headers: {
+            apikey: env.SUPABASE_KEY,
+            Authorization: `Bearer ${env.SUPABASE_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ p_model: model, p_neurons: neurons }),
+        })
+          .then(() => undefined)
+          .catch(() => undefined),
+      );
+    });
 
     // Native Cloudflare limits protect every AI-, push-, and admin-cost path
     // before body parsing, authorization work, database calls, or model usage.

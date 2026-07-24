@@ -40,12 +40,32 @@ const callsByModel: Record<string, number> = {};
  * spot to keep honest rather than ten to remember. The signature mirrors
  * env.AI.run exactly, so adoption is a rename.
  */
+/** Neuron estimate for one call of this model. */
+export function neuronsFor(model: string): number {
+  return NEURONS_PER_CALL[model] ?? DEFAULT_NEURONS;
+}
+
+/**
+ * Optional sink for per-call usage (workplan 1111). The in-memory counters above
+ * are per-isolate and die with the isolate, so a "daily snapshot" written by one
+ * isolate would badly undercount — many isolates serve traffic at once. Reporting
+ * per CALL is the only way the DB sees the true total. The worker sets this to a
+ * fire-and-forget DB write; tests and the cron path leave it unset.
+ */
+type AiUsageReporter = (model: string, neurons: number) => void;
+let usageReporter: AiUsageReporter | null = null;
+export function setAiUsageReporter(fn: AiUsageReporter | null): void {
+  usageReporter = fn;
+}
+
 export async function runAiCounted(
   ai: { run: (model: string, input: unknown) => Promise<unknown> },
   model: string,
   input: unknown,
 ): Promise<unknown> {
   callsByModel[model] = (callsByModel[model] ?? 0) + 1;
+  // Telemetry must never be able to break an actual AI call.
+  try { usageReporter?.(model, neuronsFor(model)); } catch { /* ignore */ }
   return ai.run(model, input);
 }
 
