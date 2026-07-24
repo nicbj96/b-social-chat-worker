@@ -28,9 +28,12 @@ interface Env extends RateLimitEnv {
   AI: any; // Workers AI binding
   SUPABASE_URL: string;
   SUPABASE_KEY: string;
-  /** Optional. Only used to write AI-usage telemetry (record_ai_call), which is
-   *  deliberately not anon-callable. Absent today; the feature self-activates. */
+  /** Optional. Preferred for AI-usage telemetry if ever added; the anon
+   *  SUPABASE_KEY works too because record_ai_call is token-gated. */
   SUPABASE_SERVICE_ROLE_KEY?: string;
+  /** Shared token proving this worker may increment ai_usage_daily. Without it
+   *  record_ai_call is a no-op, so the public anon key alone cannot inflate it. */
+  AI_USAGE_TOKEN?: string;
   VAPID_PUBLIC_KEY: string;
   VAPID_PRIVATE_KEY: string;
   VAPID_SUBJECT: string;
@@ -76,14 +79,16 @@ const worker = {
     // (workplan 1111). The in-memory counters are per-isolate, so only a per-call
     // write gives the DB a true daily total to divide by active users.
     //
-    // Deliberately requires a SERVICE-ROLE key. record_ai_call is not granted to
-    // anon, and must not be: the anon key ships in the public frontend, so an
-    // anon-callable counter could be inflated by anyone, poisoning a COST metric
-    // and any budget alarm built on it. Until that secret exists we simply do not
-    // report — no wasted subrequest per AI call, and it starts working the moment
-    // SUPABASE_SERVICE_ROLE_KEY is set, with no code change.
-    const usageKey = env.SUPABASE_SERVICE_ROLE_KEY;
-    if (usageKey) {
+    // This worker's SUPABASE_KEY is the ANON key — proven live: the write was
+    // refused with 42501 until anon was briefly granted execute, at which point
+    // the row landed immediately. Granting anon outright would be unsafe, since
+    // that key ships in the public frontend and anyone could then inflate a COST
+    // counter. So record_ai_call is instead TOKEN-GATED (migration
+    // 20260724730000): anon may call it, but without AI_USAGE_TOKEN it is a
+    // silent no-op. That keeps the counter trustworthy while needing no
+    // service-role key here.
+    const usageKey = env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_KEY;
+    if (usageKey && env.AI_USAGE_TOKEN) {
       // Strictly fire-and-forget: never blocks the response, and a failed write
       // loses a telemetry increment rather than breaking a chat answer.
       setAiUsageReporter((model, neurons) => {
@@ -95,10 +100,26 @@ const worker = {
               Authorization: `Bearer ${usageKey}`,
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ p_model: model, p_neurons: neurons }),
+            body: JSON.stringify({ p_model: model, p_neurons: neurons, p_token: env.AI_USAGE_TOKEN }),
           })
-            .then(() => undefined)
-            .catch(() => undefined),
+            .then(async (r) => {
+              const body = await r.text().catch(() => "");
+              if (!r.ok) {
+                console.error(JSON.stringify({ event: "ai_usage_write_failed", status: r.status, detail: body.slice(0, 200) }));
+              } else if (body.trim() === "false") {
+                // A token mismatch returns HTTP 200 with the body `false`, so
+                // checking r.ok alone reports a silent failure as success —
+                // exactly the trap that hid this during development. If the
+                // token in Cloudflare and ai_usage_config ever drift apart,
+                // this is the line that says so.
+                console.error(JSON.stringify({ event: "ai_usage_write_rejected", detail: "token mismatch — AI_USAGE_TOKEN does not match ai_usage_config" }));
+              }
+              return undefined;
+            })
+            .catch((e) => {
+              console.error(JSON.stringify({ event: "ai_usage_write_threw", detail: String(e).slice(0, 200) }));
+              return undefined;
+            }),
         );
       });
     }
