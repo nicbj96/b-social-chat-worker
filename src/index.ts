@@ -64,6 +64,27 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Admin-Key",
 };
 
+// Constant-time secret compare, matching the project's own standard
+// (telegram-notify/auth.ts). The eight admin-key checks below used `!==`, a
+// short-circuiting compare; unifying them removes the last timing-comparison
+// inconsistency in the worker. Fails closed: a null header or an unset env
+// secret is not a string, so it returns false and the caller denies. The
+// length check leaks length only, which is fixed and public for these keys.
+function timingSafeEqualStr(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const ab = new TextEncoder().encode(a);
+  const bb = new TextEncoder().encode(b);
+  if (ab.length !== bb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < ab.length; i++) diff |= ab[i] ^ bb[i];
+  return diff === 0;
+}
+/** True iff the request carries the correct admin-ask key. Fails closed when
+ *  ADMIN_ASK_KEY is unset (an unset secret can never match). */
+function adminAskKeyOk(request: Request, env: { ADMIN_ASK_KEY?: string }): boolean {
+  return timingSafeEqualStr(request.headers.get("X-Admin-Ask-Key"), env.ADMIN_ASK_KEY);
+}
+
 // Bare worker — Sentry wraps this below.
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -200,7 +221,7 @@ const worker = {
       // operational data, not public. Estimate only -- Cloudflare returns no
       // usage to the Worker, so this is calls x published neuron rates, labelled
       // as such. It is the counting a real budget is blocked on, not a bill.
-      if (request.headers.get("X-Admin-Ask-Key") !== env.ADMIN_ASK_KEY) {
+      if (!adminAskKeyOk(request, env)) {
         return jsonResponse({ ok: false, error: "unauthorized" }, 401);
       }
       return jsonResponse({ ok: true, estimate: true, ...aiCostSnapshot() });
@@ -272,7 +293,7 @@ async function callRobot(env: Env, name: string): Promise<{ status: number; data
 // On-demand robot trigger (test / "kør nu"). Gated by the shared ADMIN_ASK_KEY.
 async function handleRobotTrigger(request: Request, env: Env): Promise<Response> {
   if (!env.ADMIN_ASK_KEY) return jsonResponse({ ok: false, error: "not configured" }, 503);
-  if (request.headers.get("X-Admin-Ask-Key") !== env.ADMIN_ASK_KEY) {
+  if (!adminAskKeyOk(request, env)) {
     return jsonResponse({ ok: false, error: "unauthorized" }, 401);
   }
   let name = "";
@@ -292,7 +313,7 @@ async function handleRobotTrigger(request: Request, env: Env): Promise<Response>
 // and every URL passes through guardedFetch's allow-rules + redirect re-checks.
 async function handleAdminFetch(request: Request, env: Env): Promise<Response> {
   if (!env.ADMIN_ASK_KEY) return jsonResponse({ ok: false, error: "not configured" }, 503);
-  if (request.headers.get("X-Admin-Ask-Key") !== env.ADMIN_ASK_KEY) {
+  if (!adminAskKeyOk(request, env)) {
     return jsonResponse({ ok: false, error: "unauthorized" }, 401);
   }
   let target = "";
@@ -449,7 +470,7 @@ async function transcribeTurbo(env: Env, bytes: Uint8Array): Promise<{ text: str
 
 async function handleTranscribe(request: Request, env: Env): Promise<Response> {
   if (!env.ADMIN_ASK_KEY) return jsonResponse({ ok: false, error: "not configured" }, 503);
-  if (request.headers.get("X-Admin-Ask-Key") !== env.ADMIN_ASK_KEY) {
+  if (!adminAskKeyOk(request, env)) {
     return jsonResponse({ ok: false, error: "unauthorized" }, 401);
   }
   let bytes: Uint8Array;
@@ -518,7 +539,7 @@ async function handleTranscribe(request: Request, env: Env): Promise<Response> {
 // base64). Gated by ADMIN_ASK_KEY. The prompt is capped to keep it cheap.
 async function handleImage(request: Request, env: Env): Promise<Response> {
   if (!env.ADMIN_ASK_KEY) return jsonResponse({ ok: false, error: "not configured" }, 503);
-  if (request.headers.get("X-Admin-Ask-Key") !== env.ADMIN_ASK_KEY) {
+  if (!adminAskKeyOk(request, env)) {
     return jsonResponse({ ok: false, error: "unauthorized" }, 401);
   }
   let prompt = "";
@@ -544,7 +565,7 @@ async function handleImage(request: Request, env: Env): Promise<Response> {
 // Returns { ok, text } describing the picture. Gated by ADMIN_ASK_KEY, size-capped.
 async function handleVision(request: Request, env: Env): Promise<Response> {
   if (!env.ADMIN_ASK_KEY) return jsonResponse({ ok: false, error: "not configured" }, 503);
-  if (request.headers.get("X-Admin-Ask-Key") !== env.ADMIN_ASK_KEY) {
+  if (!adminAskKeyOk(request, env)) {
     return jsonResponse({ ok: false, error: "unauthorized" }, 401);
   }
   let b64 = "";
@@ -679,7 +700,7 @@ async function handlePushSend(request: Request, env: Env): Promise<Response> {
 // Admin-authenticated broadcast (for weekly digest / announcements)
 async function handlePushBroadcast(request: Request, env: Env): Promise<Response> {
   const adminKey = request.headers.get("X-Admin-Key");
-  if (!env.PUSH_ADMIN_KEY || adminKey !== env.PUSH_ADMIN_KEY) return jsonResponse({ error: "unauthorized" }, 401);
+  if (!timingSafeEqualStr(adminKey, env.PUSH_ADMIN_KEY)) return jsonResponse({ error: "unauthorized" }, 401);
   try {
     const body = (await request.json()) as { message: PushMessage; where?: { user_ids?: string[] } };
     if (!body.message?.title) return jsonResponse({ error: "message.title required" }, 400);
@@ -905,7 +926,7 @@ async function handleAdminAsk(request: Request, env: Env): Promise<Response> {
   if (!env.ADMIN_ASK_KEY) {
     return jsonResponse({ ok: false, error: "admin ask not configured (set ADMIN_ASK_KEY)" }, 503);
   }
-  if (request.headers.get("X-Admin-Ask-Key") !== env.ADMIN_ASK_KEY) {
+  if (!adminAskKeyOk(request, env)) {
     return jsonResponse({ ok: false, error: "unauthorized" }, 401);
   }
   if (!env.COMMAND_CENTER_INGEST_URL) {
