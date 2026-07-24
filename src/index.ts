@@ -648,12 +648,20 @@ async function handlePushBroadcast(request: Request, env: Env): Promise<Response
 }
 
 async function runWeeklyDigest(env: Env) {
-  // Send "5 events denne weekend" to all subscribed users
+  // The weekly digest is the ONLY recurring push, and its frequency controls are
+  // structural rather than a runtime counter: the Friday cron caps it at ONE send
+  // per subscriber per week, it is a single rolled-up message (never one push per
+  // matching event), and the shared `tag` makes a new digest REPLACE any still-
+  // unread one on the device instead of stacking. What was missing was hygiene —
+  // unlike handlePushBroadcast, this path swallowed every failure, so a
+  // subscription the browser had already expired (404/410) was re-pushed every
+  // single week forever. It now prunes those and records what it did, so the
+  // frequency is spent only on endpoints that still exist.
   const message: PushMessage = {
     title: "B-Social — Weekend guide 🎉",
     body: "Se hvad der sker i weekenden. Nye events matcher dine interesser.",
     url: "/feed",
-    tag: "weekly-digest",
+    tag: "weekly-digest", // one live digest per device: a new one replaces the old
   };
   const r = await fetch(`${env.SUPABASE_URL}/rest/v1/push_subscriptions?enabled=eq.true&select=endpoint,p256dh,auth`, {
     headers: { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}` },
@@ -662,9 +670,23 @@ async function runWeeklyDigest(env: Env) {
   const subsData = await r.json();
   const subs = (Array.isArray(subsData) ? subsData : []) as Array<{ endpoint: string; p256dh: string; auth: string }>;
   const vapid = vapidFromEnv(env);
+  let sent = 0, failed = 0, pruned = 0;
   for (const s of subs) {
-    try { await sendWebPush(s, message, vapid); } catch {}
+    try {
+      const res = await sendWebPush(s, message, vapid);
+      if (res.ok) {
+        sent++;
+      } else {
+        failed++;
+        // A dead endpoint disabled here is one fewer wasted push next week — the
+        // same 404/410 cleanup handlePushBroadcast already does on its path.
+        if (res.status === 404 || res.status === 410) { await disableSubscription(env, s.endpoint); pruned++; }
+      }
+    } catch { failed++; }
   }
+  // Always-on: a weekly job that silently sends nothing should read as a fact, not
+  // a guess. Mirrors the observability added to the rate-limit path.
+  console.log(JSON.stringify({ event: "weekly_digest", total: subs.length, sent, failed, pruned }));
 }
 
 // ── Embedding endpoint ─────────────────────────────────────────────
