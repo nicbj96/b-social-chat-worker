@@ -9,6 +9,20 @@
 //
 // (Cloudflare Workers' fetch already runs on CF's edge with no route to a host
 // metadata service, but we still block private targets as defence-in-depth.)
+//
+// KNOWN LIMIT — DNS rebinding (audit #33, platform-mitigated):
+// isBlockedHost inspects the hostname STRING only. It catches every literal-IP
+// obfuscation (decimal/octal/hex/IPv6-mapped/fullwidth all normalise to a dotted
+// quad before the check) and re-validates every redirect hop, but it does NOT
+// resolve DNS — so a public hostname whose A/AAAA record points at a private or
+// link-local address (e.g. an attacker domain resolving to 169.254.169.254)
+// passes the string check. This is NOT exploitable on Cloudflare: Workers egress
+// cannot route to RFC1918/link-local/metadata ranges regardless of what a name
+// resolves to, and /admin/fetch is ADMIN_ASK_KEY-gated. The guard therefore
+// relies on CF egress isolation for name-based targets. If this module is ever
+// reused OFF Cloudflare (or CF egress behaviour changes), close the gap by
+// resolving the hostname and re-checking the resolved IP against isBlockedHost
+// (or pinning/verifying the connected address) before reading the body.
 
 const MAX_REDIRECTS = 4;
 const TIMEOUT_MS = 10_000;
