@@ -235,6 +235,46 @@ export const TOOLS = [
       },
     },
   },
+  {
+    type: "function" as const,
+    function: {
+      name: "get_weather",
+      description:
+        "Hent vejrudsigten for et UDENDØRS event eller sted på en bestemt dato. Brug KUN når vejret er relevant — udendørs events (festival, marked, løb, udendørs koncert, byvandring), eller når brugeren spørger om vejr/regn/tøj. Brug latitude+longitude fra et event eller sted du allerede har fundet. Virker kun ~16 dage frem; hvis der ikke er nogen udsigt, så sig at det er for langt ude. Opfind ALDRIG vejr.",
+      parameters: {
+        type: "object",
+        properties: {
+          latitude: { type: "number", description: "Breddegrad for stedet/eventet" },
+          longitude: { type: "number", description: "Længdegrad for stedet/eventet" },
+          date: { type: "string", description: "Eventets dato i formatet YYYY-MM-DD" },
+        },
+        required: ["latitude", "longitude", "date"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "estimate_travel_time",
+      description:
+        "Estimér OMTRENTLIG afstand og rejsetid mellem to punkter — fx fra brugerens position til et event, eller mellem to events i en aftenplan (flere stop). Det er et GROVT skøn ud fra fugleflugtsafstand; sig altid 'cirka'. Brug til at vurdere om noget er i nærheden, eller til at sammensætte en realistisk rækkefølge af stop på en aften.",
+      parameters: {
+        type: "object",
+        properties: {
+          from_latitude: { type: "number", description: "Startpunkt breddegrad" },
+          from_longitude: { type: "number", description: "Startpunkt længdegrad" },
+          to_latitude: { type: "number", description: "Slutpunkt breddegrad" },
+          to_longitude: { type: "number", description: "Slutpunkt længdegrad" },
+          mode: {
+            type: "string",
+            enum: ["walk", "bike", "transit", "car"],
+            description: "Transportform. Default 'transit' (offentlig transport)",
+          },
+        },
+        required: ["from_latitude", "from_longitude", "to_latitude", "to_longitude"],
+      },
+    },
+  },
 ];
 
 export type ToolCallArgs = {

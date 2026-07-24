@@ -16,6 +16,7 @@ import {
 import { sendWebPush, type PushMessage } from "./webpush";
 import { isSafeEntityId, isValidUuid, clampString, clampNumber } from "./validate";
 import { guardedFetch } from "./fetchguard";
+import { fetchWeather, haversineKm, estimateTravelMinutes, normalizeMode, isValidLatLng } from "./context-tools";
 import { enforceRateLimit, enforceAiDailyBudget, type RateLimitEnv } from "./ratelimit";
 import { runAiCounted, aiCostSnapshot } from "./aiCost";
 import { aiBreakerIsOpen, formatFallbackReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
@@ -1258,6 +1259,39 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                     });
                   }
                   break;
+
+                // Weather for an outdoor event/place (open-meteo, free, ~16d horizon).
+                // Returns a clear "too far out"/"unavailable" note rather than inventing.
+                case "get_weather": {
+                  const lat = fnArgs.latitude, lng = fnArgs.longitude;
+                  const date = String(fnArgs.date ?? "").slice(0, 10);
+                  if (!isValidLatLng(lat, lng)) { result = { error: "Ugyldige koordinater" }; break; }
+                  // Plain fetch is safe here: the host is HARDCODED (api.open-meteo.com)
+                  // inside fetchWeather and only validated numbers/date reach the query
+                  // string — there is no user-controlled URL, so the fetchguard (which
+                  // targets arbitrary/user URLs) does not apply.
+                  const w = await fetchWeather((u, init) => fetch(u, init), lat, lng, date);
+                  result = w
+                    ? { ...w, note: "Vejrudsigt fra open-meteo — kun vejledende" }
+                    : { unavailable: true, note: "Ingen vejrudsigt for den dato (mere end ~16 dage frem, ukendt sted, eller tjenesten er nede lige nu). Opfind ikke vejr." };
+                  break;
+                }
+
+                // Rough door-to-door travel estimate from a great-circle distance.
+                // Deliberately approximate — used for "is it nearby" and multi-stop plans.
+                case "estimate_travel_time": {
+                  const { from_latitude: fLat, from_longitude: fLng, to_latitude: tLat, to_longitude: tLng } = fnArgs;
+                  if (!isValidLatLng(fLat, fLng) || !isValidLatLng(tLat, tLng)) { result = { error: "Ugyldige koordinater" }; break; }
+                  const km = haversineKm(fLat, fLng, tLat, tLng);
+                  const mode = normalizeMode(fnArgs.mode);
+                  result = {
+                    distance_km: Math.round(km * 10) / 10,
+                    mode,
+                    estimated_minutes: estimateTravelMinutes(km, mode),
+                    note: "Groft skøn ud fra fugleflugtsafstand — reel rejsetid varierer",
+                  };
+                  break;
+                }
 
           // ── Write tools (JWT-baseret, RLS-sikrede) ──────────────────────
           case "save_user_tags": {
