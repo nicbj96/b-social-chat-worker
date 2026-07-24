@@ -185,27 +185,43 @@ export async function enforceRateLimit(
 // The per-actor limiter above caps VELOCITY (30 public-AI req/min per IP) but not
 // cumulative daily SPEND: many actors each under 30/min still sum to unbounded
 // neurons over a day, and Cloudflare bills in neurons (10.000/day free). This
-// caps the aggregate. Weight is each route's estimated neuron cost (from
-// aiCost.ts's published rates), consumed against ONE global daily window, so an
-// image route would count far more than a chat turn — a DKK ceiling in the only
-// unit the platform exposes (env.AI.run returns no token/usage; see aiCost.ts).
+// caps the aggregate against ONE global daily window.
+//
+// TWO PHASES, and this split is the security fix (audit 2026-07-24):
+//   • enforceAiDailyBudget() PEEKS before dispatch — it only REJECTS when the
+//     ceiling is already spent, and charges NOTHING. Previously it consumed the
+//     route's full weight on every inbound POST, BEFORE body validation, so an
+//     attacker could exhaust the whole day's budget with ~690 malformed,
+//     model-free requests (one IP in ~23 min) and 429 the chat for everyone for
+//     up to 24h. A request that never reaches a model must cost nothing.
+//   • chargeAiDailyBudget() DEDUCTS the real per-call neuron cost, called from
+//     the aiCost usage reporter — i.e. only when env.AI.run actually fires. This
+//     also makes the ceiling reflect true spend across ALL models (image=250,
+//     vision=60, chat=55+embed), not a flat per-route pre-estimate.
 //
 // FAIL-OPEN by contract (CLAUDE.md): a budget-store outage must never take chat
 // down. On any Durable Object error, or with no limiter bound, the request
 // proceeds — the per-actor limiter still applies, and the ceiling is a secondary
 // backstop, not the primary gate.
-const ROUTE_NEURONS: Record<string, number> = {
-  "/chat": 58,   // llama-4-scout (~55) + the query embedding (~3)
-  "/search": 6,  // embedding-driven
-  "/embed": 3,
-};
 const DAY_MS = 86_400_000;
 const DEFAULT_DAILY_NEURON_BUDGET = 40_000; // ~4x the 10k/day free tier: a runaway catch, not a throttle
+const AI_BUDGET_KEY = "global:ai-neurons-daily";
 
 export interface AiBudgetEnv extends RateLimitEnv {
   AI_DAILY_NEURON_BUDGET?: string;
 }
 
+function aiBudgetCap(env: AiBudgetEnv): number {
+  return Number(env.AI_DAILY_NEURON_BUDGET) > 0
+    ? Number(env.AI_DAILY_NEURON_BUDGET)
+    : DEFAULT_DAILY_NEURON_BUDGET;
+}
+
+/**
+ * Pre-dispatch gate. Rejects a public-AI request ONLY when the global daily
+ * neuron budget is already spent. Charges nothing — a malformed or model-free
+ * request that gets this far costs zero, so it cannot be used to drain the cap.
+ */
 export async function enforceAiDailyBudget(
   request: Request,
   env: AiBudgetEnv,
@@ -215,14 +231,9 @@ export async function enforceAiDailyBudget(
   if (request.method !== "POST" || !PUBLIC_AI_ROUTES.has(pathname)) return null;
   if (!env.RATE_LIMITER) return null; // no global store — fail open (per-actor limit still guards)
 
-  const cap = Number(env.AI_DAILY_NEURON_BUDGET) > 0
-    ? Number(env.AI_DAILY_NEURON_BUDGET)
-    : DEFAULT_DAILY_NEURON_BUDGET;
-  const weight = ROUTE_NEURONS[pathname] ?? 30;
-
   try {
-    const stub = env.RATE_LIMITER.getByName("global:ai-neurons-daily");
-    const decision = await stub.consume(cap, DAY_MS, weight);
+    const stub = env.RATE_LIMITER.getByName(AI_BUDGET_KEY);
+    const decision = await stub.peek(aiBudgetCap(env), DAY_MS);
     if (decision.success) return null;
     return new Response(
       JSON.stringify({ error: "ai_budget_exhausted", retry_after_seconds: decision.retryAfterSeconds }),
@@ -234,5 +245,21 @@ export async function enforceAiDailyBudget(
   } catch {
     console.error(JSON.stringify({ event: "ai_daily_budget_unavailable", pathname, fallback: "allow" }));
     return null; // fail-open: never take chat down for a budget-store outage
+  }
+}
+
+/**
+ * Deduct the real neuron cost of ONE model call from the global daily window.
+ * Called from the aiCost usage reporter, so only actual env.AI.run() calls move
+ * the meter. Fire-and-forget: budget accounting must never delay or break an
+ * answer, and a lost increment is an undercount, not an outage.
+ */
+export async function chargeAiDailyBudget(env: AiBudgetEnv, neurons: number): Promise<void> {
+  if (!env.RATE_LIMITER || !(neurons > 0)) return;
+  try {
+    const stub = env.RATE_LIMITER.getByName(AI_BUDGET_KEY);
+    await stub.consume(aiBudgetCap(env), DAY_MS, neurons);
+  } catch {
+    console.error(JSON.stringify({ event: "ai_daily_budget_charge_failed", neurons }));
   }
 }

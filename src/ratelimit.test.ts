@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { enforceAiDailyBudget, enforceRateLimit, rateLimitActorKey, rateLimitBucketFor } from "./ratelimit";
+import { chargeAiDailyBudget, enforceAiDailyBudget, enforceRateLimit, rateLimitActorKey, rateLimitBucketFor } from "./ratelimit";
 
 describe("rateLimitBucketFor", () => {
   it("classifies expensive POST routes and leaves safe routes unlimited", () => {
@@ -170,24 +170,27 @@ describe("enforceAiDailyBudget", () => {
   const post = (path = "/chat") =>
     new Request(`https://w.test${path}`, { method: "POST", headers: { "CF-Connecting-IP": "203.0.113.9" } });
 
-  it("consumes ONE global daily key, weighted by the route's neuron cost, and passes under budget", async () => {
-    const calls: Array<{ key: string; args: unknown[] }> = [];
+  it("PEEKS the one global daily key and charges NOTHING when under budget", async () => {
+    const calls: Array<{ key: string; method: string; args: unknown[] }> = [];
     const env = {
       RATE_LIMITER: {
         getByName: (key: string) => ({
-          consume: async (...args: unknown[]) => { calls.push({ key, args }); return { success: true, retryAfterSeconds: 1 }; },
+          peek: async (...args: unknown[]) => { calls.push({ key, method: "peek", args }); return { success: true, retryAfterSeconds: 1 }; },
+          consume: async (...args: unknown[]) => { calls.push({ key, method: "consume", args }); return { success: true, retryAfterSeconds: 1 }; },
         }),
       },
     } as any;
     expect(await enforceAiDailyBudget(post("/chat"), env, "/chat", CORS)).toBeNull();
+    // The pre-dispatch gate must PEEK (read-only), never consume — that is the
+    // whole DoS fix: an inbound request costs nothing until a model actually runs.
     expect(calls).toHaveLength(1);
+    expect(calls[0].method).toBe("peek");
     expect(calls[0].key).toBe("global:ai-neurons-daily");
     expect(calls[0].args[0]).toBe(40_000); // default cap
-    expect(calls[0].args[2]).toBe(58);     // /chat neuron weight (> /embed's 3)
   });
 
   it("returns a 429 ai_budget_exhausted when the global budget is spent", async () => {
-    const env = { RATE_LIMITER: { getByName: () => ({ consume: async () => ({ success: false, retryAfterSeconds: 3600 }) }) } } as any;
+    const env = { RATE_LIMITER: { getByName: () => ({ peek: async () => ({ success: false, retryAfterSeconds: 3600 }) }) } } as any;
     const res = await enforceAiDailyBudget(post("/chat"), env, "/chat", CORS);
     expect(res?.status).toBe(429);
     expect(res?.headers.get("Retry-After")).toBe("3600");
@@ -197,10 +200,10 @@ describe("enforceAiDailyBudget", () => {
 
   it("fails OPEN — no limiter, a DO error, and non-AI routes all proceed", async () => {
     expect(await enforceAiDailyBudget(post("/chat"), {} as any, "/chat", CORS)).toBeNull();
-    const throwEnv = { RATE_LIMITER: { getByName: () => ({ consume: async () => { throw new Error("DO down"); } }) } } as any;
+    const throwEnv = { RATE_LIMITER: { getByName: () => ({ peek: async () => { throw new Error("DO down"); } }) } } as any;
     expect(await enforceAiDailyBudget(post("/chat"), throwEnv, "/chat", CORS)).toBeNull();
     // /push/send is not a public-AI route, so the AI budget must not touch it.
-    const spentEnv = { RATE_LIMITER: { getByName: () => ({ consume: async () => ({ success: false, retryAfterSeconds: 1 }) }) } } as any;
+    const spentEnv = { RATE_LIMITER: { getByName: () => ({ peek: async () => ({ success: false, retryAfterSeconds: 1 }) }) } } as any;
     expect(await enforceAiDailyBudget(post("/push/send"), spentEnv, "/push/send", CORS)).toBeNull();
   });
 
@@ -208,9 +211,41 @@ describe("enforceAiDailyBudget", () => {
     const seenCaps: number[] = [];
     const env = {
       AI_DAILY_NEURON_BUDGET: "12345",
-      RATE_LIMITER: { getByName: () => ({ consume: async (cap: number) => { seenCaps.push(cap); return { success: true, retryAfterSeconds: 1 }; } }) },
+      RATE_LIMITER: { getByName: () => ({ peek: async (cap: number) => { seenCaps.push(cap); return { success: true, retryAfterSeconds: 1 }; } }) },
     } as any;
     await enforceAiDailyBudget(post("/embed"), env, "/embed", CORS);
     expect(seenCaps[0]).toBe(12345);
+  });
+});
+
+describe("chargeAiDailyBudget", () => {
+  it("consumes the real per-call neurons against the one global daily key", async () => {
+    const calls: Array<{ key: string; args: unknown[] }> = [];
+    const env = {
+      RATE_LIMITER: {
+        getByName: (key: string) => ({
+          consume: async (...args: unknown[]) => { calls.push({ key, args }); return { success: true, retryAfterSeconds: 1 }; },
+        }),
+      },
+    } as any;
+    await chargeAiDailyBudget(env, 250); // e.g. an image generation
+    expect(calls).toHaveLength(1);
+    expect(calls[0].key).toBe("global:ai-neurons-daily");
+    expect(calls[0].args[0]).toBe(40_000); // cap
+    expect(calls[0].args[2]).toBe(250);    // the real cost, not a flat route weight
+  });
+
+  it("is a no-op with no limiter, a non-positive cost, or a DO error (never throws)", async () => {
+    // No binding.
+    await expect(chargeAiDailyBudget({} as any, 55)).resolves.toBeUndefined();
+    // Zero / negative neurons cost nothing.
+    const seen: unknown[][] = [];
+    const env = { RATE_LIMITER: { getByName: () => ({ consume: async (...a: unknown[]) => { seen.push(a); return { success: true, retryAfterSeconds: 1 }; } }) } } as any;
+    await chargeAiDailyBudget(env, 0);
+    await chargeAiDailyBudget(env, -5);
+    expect(seen).toHaveLength(0);
+    // A DO error is swallowed — budget accounting must never break a chat answer.
+    const throwEnv = { RATE_LIMITER: { getByName: () => ({ consume: async () => { throw new Error("DO down"); } }) } } as any;
+    await expect(chargeAiDailyBudget(throwEnv, 55)).resolves.toBeUndefined();
   });
 });

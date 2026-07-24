@@ -17,7 +17,7 @@ import { sendWebPush, type PushMessage } from "./webpush";
 import { isSafeEntityId, isValidUuid, clampString, clampNumber } from "./validate";
 import { guardedFetch } from "./fetchguard";
 import { fetchWeather, haversineKm, estimateTravelMinutes, normalizeMode, isValidLatLng } from "./context-tools";
-import { enforceRateLimit, enforceAiDailyBudget, type RateLimitEnv } from "./ratelimit";
+import { enforceRateLimit, enforceAiDailyBudget, chargeAiDailyBudget, type RateLimitEnv } from "./ratelimit";
 import { runAiCounted, aiCostSnapshot, setAiUsageReporter } from "./aiCost";
 import { aiBreakerIsOpen, formatFallbackReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 
@@ -87,42 +87,52 @@ const worker = {
     // 20260724730000): anon may call it, but without AI_USAGE_TOKEN it is a
     // silent no-op. That keeps the counter trustworthy while needing no
     // service-role key here.
+    // ONE reporter, always installed, fires per real env.AI.run() call. It does
+    // two independent fire-and-forget jobs:
+    //   1. Charge the global daily neuron budget by this call's real cost. This
+    //      is what makes the budget a spend ceiling instead of a per-request
+    //      tax — and it must run regardless of telemetry config, so it lives
+    //      OUTSIDE the usageKey/token guard below (an unconfigured telemetry
+    //      write must not disable the runaway catch).
+    //   2. Persist per-call usage to the DB when telemetry is configured.
     const usageKey = env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_KEY;
-    if (usageKey && env.AI_USAGE_TOKEN) {
-      // Strictly fire-and-forget: never blocks the response, and a failed write
-      // loses a telemetry increment rather than breaking a chat answer.
-      setAiUsageReporter((model, neurons) => {
-        ctx.waitUntil(
-          fetch(`${env.SUPABASE_URL}/rest/v1/rpc/record_ai_call`, {
-            method: "POST",
-            headers: {
-              apikey: usageKey,
-              Authorization: `Bearer ${usageKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ p_model: model, p_neurons: neurons, p_token: env.AI_USAGE_TOKEN }),
+    const canWriteUsage = Boolean(usageKey && env.AI_USAGE_TOKEN);
+    setAiUsageReporter((model, neurons) => {
+      // (1) Budget accounting — always. Never blocks or breaks a chat answer.
+      ctx.waitUntil(chargeAiDailyBudget(env, neurons));
+
+      // (2) Telemetry — only when a usable key + token exist.
+      if (!canWriteUsage) return;
+      ctx.waitUntil(
+        fetch(`${env.SUPABASE_URL}/rest/v1/rpc/record_ai_call`, {
+          method: "POST",
+          headers: {
+            apikey: usageKey as string,
+            Authorization: `Bearer ${usageKey as string}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ p_model: model, p_neurons: neurons, p_token: env.AI_USAGE_TOKEN }),
+        })
+          .then(async (r) => {
+            const body = await r.text().catch(() => "");
+            if (!r.ok) {
+              console.error(JSON.stringify({ event: "ai_usage_write_failed", status: r.status, detail: body.slice(0, 200) }));
+            } else if (body.trim() === "false") {
+              // A token mismatch returns HTTP 200 with the body `false`, so
+              // checking r.ok alone reports a silent failure as success —
+              // exactly the trap that hid this during development. If the
+              // token in Cloudflare and ai_usage_config ever drift apart,
+              // this is the line that says so.
+              console.error(JSON.stringify({ event: "ai_usage_write_rejected", detail: "token mismatch — AI_USAGE_TOKEN does not match ai_usage_config" }));
+            }
+            return undefined;
           })
-            .then(async (r) => {
-              const body = await r.text().catch(() => "");
-              if (!r.ok) {
-                console.error(JSON.stringify({ event: "ai_usage_write_failed", status: r.status, detail: body.slice(0, 200) }));
-              } else if (body.trim() === "false") {
-                // A token mismatch returns HTTP 200 with the body `false`, so
-                // checking r.ok alone reports a silent failure as success —
-                // exactly the trap that hid this during development. If the
-                // token in Cloudflare and ai_usage_config ever drift apart,
-                // this is the line that says so.
-                console.error(JSON.stringify({ event: "ai_usage_write_rejected", detail: "token mismatch — AI_USAGE_TOKEN does not match ai_usage_config" }));
-              }
-              return undefined;
-            })
-            .catch((e) => {
-              console.error(JSON.stringify({ event: "ai_usage_write_threw", detail: String(e).slice(0, 200) }));
-              return undefined;
-            }),
-        );
-      });
-    }
+          .catch((e) => {
+            console.error(JSON.stringify({ event: "ai_usage_write_threw", detail: String(e).slice(0, 200) }));
+            return undefined;
+          }),
+      );
+    });
 
     // Native Cloudflare limits protect every AI-, push-, and admin-cost path
     // before body parsing, authorization work, database calls, or model usage.
