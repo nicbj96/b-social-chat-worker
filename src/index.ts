@@ -28,6 +28,9 @@ interface Env extends RateLimitEnv {
   AI: any; // Workers AI binding
   SUPABASE_URL: string;
   SUPABASE_KEY: string;
+  /** Optional. Only used to write AI-usage telemetry (record_ai_call), which is
+   *  deliberately not anon-callable. Absent today; the feature self-activates. */
+  SUPABASE_SERVICE_ROLE_KEY?: string;
   VAPID_PUBLIC_KEY: string;
   VAPID_PRIVATE_KEY: string;
   VAPID_SUBJECT: string;
@@ -72,23 +75,33 @@ const worker = {
     // Persist AI usage per CALL so the day's neuron spend survives the isolate
     // (workplan 1111). The in-memory counters are per-isolate, so only a per-call
     // write gives the DB a true daily total to divide by active users.
-    // Strictly fire-and-forget: never blocks the response, and a failed write
-    // loses a telemetry increment rather than breaking a chat answer.
-    setAiUsageReporter((model, neurons) => {
-      ctx.waitUntil(
-        fetch(`${env.SUPABASE_URL}/rest/v1/rpc/record_ai_call`, {
-          method: "POST",
-          headers: {
-            apikey: env.SUPABASE_KEY,
-            Authorization: `Bearer ${env.SUPABASE_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ p_model: model, p_neurons: neurons }),
-        })
-          .then(() => undefined)
-          .catch(() => undefined),
-      );
-    });
+    //
+    // Deliberately requires a SERVICE-ROLE key. record_ai_call is not granted to
+    // anon, and must not be: the anon key ships in the public frontend, so an
+    // anon-callable counter could be inflated by anyone, poisoning a COST metric
+    // and any budget alarm built on it. Until that secret exists we simply do not
+    // report — no wasted subrequest per AI call, and it starts working the moment
+    // SUPABASE_SERVICE_ROLE_KEY is set, with no code change.
+    const usageKey = env.SUPABASE_SERVICE_ROLE_KEY;
+    if (usageKey) {
+      // Strictly fire-and-forget: never blocks the response, and a failed write
+      // loses a telemetry increment rather than breaking a chat answer.
+      setAiUsageReporter((model, neurons) => {
+        ctx.waitUntil(
+          fetch(`${env.SUPABASE_URL}/rest/v1/rpc/record_ai_call`, {
+            method: "POST",
+            headers: {
+              apikey: usageKey,
+              Authorization: `Bearer ${usageKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ p_model: model, p_neurons: neurons }),
+          })
+            .then(() => undefined)
+            .catch(() => undefined),
+        );
+      });
+    }
 
     // Native Cloudflare limits protect every AI-, push-, and admin-cost path
     // before body parsing, authorization work, database calls, or model usage.
