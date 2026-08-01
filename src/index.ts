@@ -1031,6 +1031,10 @@ async function directDiscoveryFallback(
 }
 
 async function handleChat(request: Request, env: Env, executionCtx: ExecutionContext): Promise<Response> {
+  // Kept in the outer scope so the catch below can still answer a discovery
+  // question after the model path has failed (see the catch for why).
+  let fallbackMessages: ChatMessage[] | null = null;
+  let fallbackCtx: { user_prefs?: { city?: string } } = {};
   try {
     // S4 — reject obviously-oversized bodies before parsing/work.
     const declaredLen = Number(request.headers.get("content-length") || 0);
@@ -1103,11 +1107,13 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
     if (!userMessages) {
       return jsonResponse({ error: "Ugyldige chatbeskeder" }, 400);
     }
+    fallbackMessages = userMessages;
 
     executionCtx.waitUntil(notifyCommandCenter(env, latestUserMessage(userMessages), body.context || {}));
 
     // Build page-aware context injection for the system prompt
     const ctx = body.context || {};
+    fallbackCtx = ctx;
     const contextLines: string[] = [];
     if (ctx.pageType) {
       const pageLabels: Record<string, string> = {
@@ -1649,7 +1655,32 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
     // back in `details` from a single forced error. The log keeps the detail;
     // the caller gets the sentence.
     console.error("Chat error:", err);
-    return jsonResponse({ error: "Noget gik galt. Prøv igen." }, 500);
+
+    // The MODEL failing is not the same as having no answer. Workers AI has a
+    // daily neuron allowance, models have outages, and calls time out -- none
+    // of which the reader can act on, and all of which used to surface as
+    // "Noget gik galt" on a question we could answer perfectly well.
+    // directDiscoveryFallback is pure Supabase (no env.AI at all), so when the
+    // question was a discovery question, answer it instead of apologising.
+    // (2026-08-01 customer audit: every event-search query 500'd this way while
+    // plain chitchat, which needs no tools, returned 200.)
+    if (fallbackMessages) {
+      try {
+        const latest = latestUserMessage(fallbackMessages);
+        if (isDiscoverySeekingMessage(latest)) {
+          return await directDiscoveryFallback(env, fallbackMessages, fallbackCtx);
+        }
+      } catch (fallbackErr) {
+        console.error("Chat fallback error:", fallbackErr);
+      }
+    }
+
+    // Nothing left to answer with. Say what is actually true -- the old copy
+    // ("Tjek dit internet") blamed the reader's connection for our outage --
+    // and point at the surface that does not need the assistant.
+    return jsonResponse({
+      error: "Jeg kan ikke søge lige nu. Prøv igen om lidt, eller find events direkte under Udforsk.",
+    }, 503);
   }
 }
 
