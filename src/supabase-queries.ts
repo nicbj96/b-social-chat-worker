@@ -187,17 +187,32 @@ export async function searchPlaces(
   };
 }
 
-// Helper: format ISO date to nice Danish format
+// Helper: format ISO date to nice Danish format.
+//
+// timeZone is NOT optional here. A Worker isolate runs in UTC, so without it
+// every time came out an hour or two early — "kl. 17.00" for an event the site
+// itself lists at 19.00 (2026-08-02 live verification). A customer acting on
+// the assistant's answer would show up two hours before the doors open, which
+// is worse than not answering at all.
+const EVENT_TZ = "Europe/Copenhagen";
+
 function formatDate(isoDate: string): string {
   try {
     const date = new Date(isoDate);
+    if (Number.isNaN(date.getTime())) return isoDate;
+
+    // Midnight UTC is the importer's "we got a date, not a time" sentinel
+    // (mirrors the frontend's eventTimeUnknown rule). Rendering it as a clock
+    // would invent a start time, so the date stands alone.
+    const timeUnknown = date.getUTCHours() === 0 && date.getUTCMinutes() === 0;
+
     return date.toLocaleDateString("da-DK", {
       weekday: "long",
       day: "numeric",
       month: "long",
       year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
+      timeZone: EVENT_TZ,
+      ...(timeUnknown ? {} : { hour: "2-digit", minute: "2-digit" }),
     });
   } catch {
     return isoDate;
