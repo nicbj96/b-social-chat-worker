@@ -886,6 +886,19 @@ function latestUserMessage(messages: ChatMessage[]) {
   return "";
 }
 
+/** Model tool arguments are often a JSON string, and sometimes not valid JSON. */
+function parseToolArgs(raw: unknown): Record<string, any> | null {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, any>;
+  if (typeof raw !== "string") return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parsed as Record<string, any>;
+  } catch {
+    return null;
+  }
+}
+
 async function notifyCommandCenter(env: Env, message: string, context: unknown) {
   if (!env.COMMAND_CENTER_INGEST_URL || !env.COMMAND_CENTER_INGEST_TOKEN || !message) return;
 
@@ -1276,12 +1289,18 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
 
             for (const toolCall of aiResponse.tool_calls) {
               const fnName = toolCall.function.name;
-              const fnArgs =
-                typeof toolCall.function.arguments === "string"
-                  ? JSON.parse(toolCall.function.arguments)
-                  : toolCall.function.arguments;
+              const fnArgs = parseToolArgs(toolCall.function?.arguments);
 
               let result: any;
+              if (!fnArgs) {
+                result = { error: "ugyldige tool-argumenter" };
+                messages.push({
+                  role: "tool",
+                  content: JSON.stringify(result),
+                  tool_call_id: toolCall.id,
+                });
+                continue;
+              }
 
               switch (fnName) {
                 case "semantic_search": {
@@ -1604,9 +1623,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       // Collect tag slugs from tool arguments (for live filter update on frontend)
       const collectedTagSlugs: string[] = [];
       for (const toolCall of aiResponse.tool_calls) {
-        const args = typeof toolCall.function.arguments === "string"
-          ? JSON.parse(toolCall.function.arguments)
-          : toolCall.function.arguments;
+        const args = parseToolArgs(toolCall.function?.arguments) || {};
         if (args.category) collectedTagSlugs.push(args.category);
         // args.tags can be string (search_events / search_places) or string[]
         // (save_user_tags). Handle both shapes.
@@ -1666,10 +1683,11 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
     // plain chitchat, which needs no tools, returned 200.)
     if (fallbackMessages) {
       try {
-        const latest = latestUserMessage(fallbackMessages);
-        if (isDiscoverySeekingMessage(latest)) {
-          return await directDiscoveryFallback(env, fallbackMessages, fallbackCtx);
-        }
+        // A parsed /chat turn already has a question we can answer from the
+        // catalogue. Gating this on isDiscoverySeekingMessage left the live
+        // golden-set event/save prompts on the 503 path when a later throw
+        // (malformed tool JSON) skipped the inner AI catch.
+        return await directDiscoveryFallback(env, fallbackMessages, fallbackCtx);
       } catch (fallbackErr) {
         console.error("Chat fallback error:", fallbackErr);
       }

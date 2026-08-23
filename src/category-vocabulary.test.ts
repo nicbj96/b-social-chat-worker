@@ -15,6 +15,8 @@ describe("category vocabulary normalisation", () => {
     expect(normalizeCategory("concert")).toBe("musik-lyd");
     expect(normalizeCategory("Food")).toBe("mad-drikke");
     expect(normalizeCategory("restaurants")).toBe("mad-drikke");
+    expect(normalizeCategory("spise")).toBe("mad-drikke");
+    expect(normalizeCategory("spisesteder")).toBe("mad-drikke");
     expect(normalizeCategory("museum")).toBe("kultur-kunst");
     expect(normalizeCategory("kids")).toBe("børn-familie");
     expect(normalizeCategory("running")).toBe("motion-fitness");

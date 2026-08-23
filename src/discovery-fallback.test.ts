@@ -118,6 +118,16 @@ describe("isDiscoverySeekingMessage / ungrounded replies", () => {
     expect(isDiscoverySeekingMessage("hej")).toBe(false);
   });
 
+  it("treats the live golden-set event questions as discovery, but not a save", () => {
+    // Measured live 2026-08-22: these two 503'd because the outer catch only
+    // falls back when isDiscoverySeekingMessage is true. Skagen/Thisted were
+    // missing from the city list; "er der" and "turnering" were missing from
+    // the verb/noun lists.
+    expect(isDiscoverySeekingMessage("Er der en Beyoncé-koncert i Skagen på tirsdag?")).toBe(true);
+    expect(isDiscoverySeekingMessage("Find quidditch-turneringer i Thisted i morgen")).toBe(true);
+    expect(isDiscoverySeekingMessage("Gem at jeg elsker jazz")).toBe(false);
+  });
+
   it("flags invented placeholder discovery prose", () => {
     expect(looksUngroundedDiscoveryReply("Her er hvad jeg fandt:\n(search result)")).toBe(true);
     expect(looksUngroundedDiscoveryReply("Her er resultater direkte fra B-Social:\n• Real Event — CPH")).toBe(false);
@@ -292,6 +302,14 @@ describe("category rules survive Danish inflection", () => {
   it("does not invent a category for an unrelated question", () => {
     // The rule must not become so loose that everything matches something.
     expect(inferDiscoveryIntent("hvad kan man lave i weekenden").eventCategory).toBeUndefined();
+  });
+
+  it("maps 'spisesteder' to mad-drikke so a place search is not unfiltered", () => {
+    // Live golden-set 2026-08-22: "Find spisesteder i Aarhus" hit the
+    // places fallback with no placeCategory, then returned zero place_ids.
+    const i = inferDiscoveryIntent("Find spisesteder i Aarhus");
+    expect(i.kind).toBe("places");
+    expect(i.placeCategory).toBe("mad-drikke");
   });
 });
 

@@ -144,7 +144,7 @@ const CATEGORY_RULES = [
   // reply was correctly located and still returned a festival and a mountain
   // bike trail.
   { test: /\b(kultur|kunst|museum|musee|udstilling)\w*/iu, placeCategory: "kultur-kunst", eventCategory: "kunst", tag: "kunst" },
-  { test: /\b(mad|restaurant|café|cafe|drikke)\w*/iu, placeCategory: "mad-drikke", eventCategory: "mad_drikke", tag: "mad_drikke" },  // was "mad": 0 events carry it
+  { test: /\b(mad|restaurant|café|cafe|drikke|spise)\w*/iu, placeCategory: "mad-drikke", eventCategory: "mad_drikke", tag: "mad_drikke" },  // was "mad": 0 events carry it
   { test: /\b(motion|fitness|løb|cykel|sport)\w*/iu, placeCategory: "motion-fitness", eventCategory: "sport", tag: "sport" },  // was "motion": 0 events carry it
 ] as const;
 
@@ -288,9 +288,9 @@ function fuzzyCity(text: string): string | undefined {
 export function isDiscoverySeekingMessage(message: string): boolean {
   const text = String(message || "").trim();
   if (!text) return false;
-  const hasVerb = /\b(find|vis|søg|anbefal|show|recommend|search|looking for|hvad sker|hvad kan)\b/iu.test(text);
-  const hasNoun = /\b(event|events|sted|steder|koncert|festival|jazz|aktivitet|aktiviteter|museum|restaurant|café|cafe|park|skov)\w*\b/iu.test(text);
-  const hasCity = /\b(kbh|cph|københavn|copenhagen|aarhus|århus|aalborg|ålborg|odense|malmö|malmo|frederikshavn)\b/iu.test(text);
+  const hasVerb = /\b(find|vis|søg|anbefal|show|recommend|search|looking for|hvad sker|hvad kan|er der)\b/iu.test(text);
+  const hasNoun = /\b(event|events|sted|steder|koncert|festival|jazz|aktivitet|aktiviteter|museum|restaurant|café|cafe|park|skov|turnering)\w*\b/iu.test(text);
+  const hasCity = /\b(kbh|cph|københavn|copenhagen|aarhus|århus|aalborg|ålborg|odense|malmö|malmo|frederikshavn|skagen|thisted)\b/iu.test(text);
   return (hasVerb && (hasNoun || hasCity)) || (hasNoun && hasCity);
 }
 

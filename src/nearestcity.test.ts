@@ -27,6 +27,16 @@ describe("searchPlaces city matching", () => {
     expect(calls.or).toContain("nearest_city.ilike.%Aarhus%");
   });
 
+  it("also matches the Århus spelling when the user wrote Aarhus", async () => {
+    // Live 2026-08-23: "Find restauranter i Aarhus" returned zero rows while
+    // the same query in København returned places. The catalogue stores the
+    // city as Århus; a single ilike on Aarhus misses every row.
+    const { client, calls } = fakeSupabase();
+    await searchPlaces(client as any, { city: "Aarhus" } as any);
+    expect(calls.or).toContain("city.ilike.%Århus%");
+    expect(calls.or).toContain("nearest_city.ilike.%Århus%");
+  });
+
   it("selects nearest_city so a derived match is distinguishable from a real one", async () => {
     const { client, calls } = fakeSupabase();
     await searchPlaces(client as any, {} as any);
