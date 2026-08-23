@@ -7,6 +7,30 @@ export function createSupabaseClient(url: string, key: string): SupabaseClient {
   return createClient(url, key);
 }
 
+/**
+ * Spellings that must hit the same city in the catalogue.
+ *
+ * Live 2026-08-23: "Find restauranter i Aarhus" returned 0 rows while the same
+ * query in København returned places. The catalogue stores Århus; a single
+ * ilike on Aarhus misses every row. Same trap for København/Copenhagen on
+ * events.location.
+ */
+const CITY_SPELLING_ALIASES: Record<string, string[]> = {
+  aarhus: ["Aarhus", "Århus"],
+  århus: ["Aarhus", "Århus"],
+  aalborg: ["Aalborg", "Ålborg"],
+  ålborg: ["Aalborg", "Ålborg"],
+  københavn: ["København", "Copenhagen"],
+  copenhagen: ["København", "Copenhagen"],
+};
+
+export function citySearchNeedles(city: string | undefined | null): string[] {
+  const cleaned = String(city || "").replace(/[%,()]/g, "").trim();
+  if (!cleaned) return [];
+  const extras = CITY_SPELLING_ALIASES[cleaned.toLocaleLowerCase("da-DK")];
+  return extras ? [...new Set(extras)] : [cleaned];
+}
+
 // Search events with optional filters
 export async function searchEvents(
   supabase: SupabaseClient,
@@ -33,7 +57,12 @@ export async function searchEvents(
   }
 
   if (args.city) {
-    query = query.ilike("location", `%${args.city}%`);
+    const needles = citySearchNeedles(args.city);
+    if (needles.length === 1) {
+      query = query.ilike("location", `%${needles[0]}%`);
+    } else if (needles.length > 1) {
+      query = query.or(needles.map((needle) => `location.ilike.%${needle}%`).join(","));
+    }
   }
 
   if (args.mode) {
@@ -145,9 +174,13 @@ export async function searchPlaces(
     // nearest_city is DERIVED from coordinates (nearest same-country place that
     // does have a city, capped at 25km), so it is a weaker claim than city and
     // deliberately kept in its own column rather than written into city.
-    const needle = String(args.city).replace(/[%,()]/g, "").trim();
-    if (needle) {
-      query = query.or(`city.ilike.%${needle}%,nearest_city.ilike.%${needle}%`);
+    const needles = citySearchNeedles(args.city);
+    if (needles.length) {
+      const parts = needles.flatMap((needle) => [
+        `city.ilike.%${needle}%`,
+        `nearest_city.ilike.%${needle}%`,
+      ]);
+      query = query.or(parts.join(","));
     }
   }
 

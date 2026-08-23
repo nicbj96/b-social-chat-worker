@@ -28,6 +28,7 @@ vi.mock("./supabase-queries", async (importOriginal) => ({
   searchRoutes: vi.fn(async () => ({ results: [] })),
 }));
 
+import { searchEvents, searchPlaces } from "./supabase-queries";
 import worker from "./index";
 import { __resetAiBreaker } from "./discovery-fallback";
 
@@ -62,5 +63,56 @@ describe("third-party outage — Workers AI down", () => {
     expect(body.degraded).toBe(true); // took the direct-discovery fallback branch
     expect(body.event_ids).toContain("evt-outage-1"); // grounded in the mocked DB row
     expect(String(body.reply)).toContain("Jazzkoncert i Aalborg");
+  });
+
+  // Live golden-set 2026-08-22 (eval:chat vs SHA 5b6869f): these three
+  // prompts returned HTTP 503 with the outage copy. isDiscoverySeekingMessage
+  // is false for all three, so the outer catch skipped the DB fallback and
+  // surfaced a 5xx. A parsed /chat turn must not do that.
+  it("golden-set prompts that are not classified as discovery still do not 503 when AI is down", async () => {
+    vi.mocked(searchEvents).mockResolvedValue({ results: [] });
+    vi.mocked(searchPlaces).mockResolvedValue({ results: [] });
+    const aiRun = vi.fn().mockRejectedValue(new Error("Workers AI 500 upstream"));
+    const env = environment(aiRun);
+    const prompts = [
+      "Er der en Beyoncé-koncert i Skagen på tirsdag?",
+      "Find quidditch-turneringer i Thisted i morgen",
+      "Gem at jeg elsker jazz",
+    ];
+    for (const content of prompts) {
+      const response = await worker.fetch!(chatRequest(content), env, executionContext());
+      expect(response.status, content).toBe(200);
+      const body: any = await response.json();
+      expect(body.error, content).toBeUndefined();
+      expect(Array.isArray(body.event_ids), content).toBe(true);
+      expect(Array.isArray(body.place_ids), content).toBe(true);
+      expect(String(body.reply || ""), content).not.toMatch(/har gemt|er gemt/i);
+    }
+  });
+
+  it("malformed tool-call JSON must not 503 a valid /chat turn", async () => {
+    // Live 503s were the OUTER catch: the model answered, then
+    // JSON.parse(toolCall.function.arguments) threw, and
+    // isDiscoverySeekingMessage was false so the catch skipped fallback.
+    const aiRun = vi.fn().mockResolvedValue({
+      response: "",
+      tool_calls: [
+        {
+          id: "call_1",
+          function: { name: "search_events", arguments: "{not-json" },
+        },
+      ],
+    });
+    const env = environment(aiRun);
+    const response = await worker.fetch!(
+      chatRequest("Er der en Beyoncé-koncert i Skagen på tirsdag?"),
+      env,
+      executionContext(),
+    );
+    expect(response.status).toBe(200);
+    const body: any = await response.json();
+    expect(body.error).toBeUndefined();
+    expect(Array.isArray(body.event_ids)).toBe(true);
+    expect(Array.isArray(body.place_ids)).toBe(true);
   });
 });
