@@ -19,7 +19,7 @@ import { guardedFetch } from "./fetchguard";
 import { fetchWeather, haversineKm, estimateTravelMinutes, normalizeMode, isValidLatLng } from "./context-tools";
 import { enforceRateLimit, enforceAiDailyBudget, chargeAiDailyBudget, type RateLimitEnv } from "./ratelimit";
 import { runAiCounted, aiCostSnapshot, setAiUsageReporter } from "./aiCost";
-import { aiBreakerIsOpen, formatFallbackReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
+import { aiBreakerIsOpen, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 
 export { RateLimitDurableObject } from "./rate-limit-do";
 
@@ -886,6 +886,19 @@ function latestUserMessage(messages: ChatMessage[]) {
   return "";
 }
 
+/** Model tool arguments are often a JSON string, and sometimes not valid JSON. */
+function parseToolArgs(raw: unknown): Record<string, any> | null {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, any>;
+  if (typeof raw !== "string") return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parsed as Record<string, any>;
+  } catch {
+    return null;
+  }
+}
+
 async function notifyCommandCenter(env: Env, message: string, context: unknown) {
   if (!env.COMMAND_CENTER_INGEST_URL || !env.COMMAND_CENTER_INGEST_TOKEN || !message) return;
 
@@ -1028,6 +1041,33 @@ async function directDiscoveryFallback(
   }
 
   return jsonResponse(formatFallbackReply(intent, places, events, language));
+}
+
+/**
+ * What a /chat turn gets once the model path has failed.
+ *
+ * The catalogue safety net exists for DISCOVERY questions. Running it for every
+ * parsed turn — what 4b924a1 did by dropping the outer gate — answered "hej,
+ * hvad kan du?", "godmorgen" and "Gem at jeg elsker jazz" with "Jeg fandt ingen
+ * resultater med de valgte filtre.": a claim about a search nobody asked for,
+ * paid for with two Supabase queries that could not have changed the answer.
+ *
+ * So the gate goes here, in front of EVERY failure path (breaker open, first AI
+ * call, follow-up AI call, umbrella catch), not just the outer one: only a turn
+ * that actually asks us to look something up may be answered from the
+ * catalogue. Everything else gets an honest 200 — not a 5xx, because the outage
+ * is ours, and not catalogue copy, because there is nothing to report.
+ */
+async function catalogueFallbackForTurn(
+  env: Env,
+  userMessages: ChatMessage[],
+  context: { user_prefs?: { city?: string } },
+): Promise<Response> {
+  const latest = latestUserMessage(userMessages);
+  if (!isDiscoverySeekingMessage(latest)) {
+    return jsonResponse(formatNonCatalogueReply(latest));
+  }
+  return await directDiscoveryFallback(env, userMessages, context);
 }
 
 async function handleChat(request: Request, env: Env, executionCtx: ExecutionContext): Promise<Response> {
@@ -1233,7 +1273,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
     // grounded database answer.
     if (aiBreakerIsOpen()) {
       console.error(JSON.stringify({ event: "ai_breaker_open", action: "direct_fallback" }));
-      return await directDiscoveryFallback(env, userMessages, ctx);
+      return await catalogueFallbackForTurn(env, userMessages, ctx);
     }
 
     // First AI call — may include tool calls
@@ -1253,7 +1293,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
         quota: isAiQuotaError(error),
         detail: String(error instanceof Error ? error.message : error).slice(0, 140),
       }));
-      return directDiscoveryFallback(env, userMessages, ctx);
+      return catalogueFallbackForTurn(env, userMessages, ctx);
     }
     recordAiSuccess();
 
@@ -1276,12 +1316,18 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
 
             for (const toolCall of aiResponse.tool_calls) {
               const fnName = toolCall.function.name;
-              const fnArgs =
-                typeof toolCall.function.arguments === "string"
-                  ? JSON.parse(toolCall.function.arguments)
-                  : toolCall.function.arguments;
+              const fnArgs = parseToolArgs(toolCall.function?.arguments);
 
               let result: any;
+              if (!fnArgs) {
+                result = { error: "ugyldige tool-argumenter" };
+                messages.push({
+                  role: "tool",
+                  content: JSON.stringify(result),
+                  tool_call_id: toolCall.id,
+                });
+                continue;
+              }
 
               switch (fnName) {
                 case "semantic_search": {
@@ -1598,15 +1644,13 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
           quota: isAiQuotaError(error),
           detail: String(error instanceof Error ? error.message : error).slice(0, 140),
         }));
-        return directDiscoveryFallback(env, userMessages, ctx);
+        return catalogueFallbackForTurn(env, userMessages, ctx);
       }
 
       // Collect tag slugs from tool arguments (for live filter update on frontend)
       const collectedTagSlugs: string[] = [];
       for (const toolCall of aiResponse.tool_calls) {
-        const args = typeof toolCall.function.arguments === "string"
-          ? JSON.parse(toolCall.function.arguments)
-          : toolCall.function.arguments;
+        const args = parseToolArgs(toolCall.function?.arguments) || {};
         if (args.category) collectedTagSlugs.push(args.category);
         // args.tags can be string (search_events / search_places) or string[]
         // (save_user_tags). Handle both shapes.
@@ -1666,10 +1710,11 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
     // plain chitchat, which needs no tools, returned 200.)
     if (fallbackMessages) {
       try {
-        const latest = latestUserMessage(fallbackMessages);
-        if (isDiscoverySeekingMessage(latest)) {
-          return await directDiscoveryFallback(env, fallbackMessages, fallbackCtx);
-        }
+        // The catalogue answer is only for a turn that asked us to look
+        // something up. The 503 class this branch fixes (golden-set cases 1/2)
+        // is discovery-shaped and keeps directDiscoveryFallback; a chitchat or
+        // save turn must not be answered with "Jeg fandt ingen resultater".
+        return await catalogueFallbackForTurn(env, fallbackMessages, fallbackCtx);
       } catch (fallbackErr) {
         console.error("Chat fallback error:", fallbackErr);
       }

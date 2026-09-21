@@ -144,7 +144,7 @@ const CATEGORY_RULES = [
   // reply was correctly located and still returned a festival and a mountain
   // bike trail.
   { test: /\b(kultur|kunst|museum|musee|udstilling)\w*/iu, placeCategory: "kultur-kunst", eventCategory: "kunst", tag: "kunst" },
-  { test: /\b(mad|restaurant|café|cafe|drikke)\w*/iu, placeCategory: "mad-drikke", eventCategory: "mad_drikke", tag: "mad_drikke" },  // was "mad": 0 events carry it
+  { test: /\b(mad|restaurant|café|cafe|drikke|spise)\w*/iu, placeCategory: "mad-drikke", eventCategory: "mad_drikke", tag: "mad_drikke" },  // was "mad": 0 events carry it
   { test: /\b(motion|fitness|løb|cykel|sport)\w*/iu, placeCategory: "motion-fitness", eventCategory: "sport", tag: "sport" },  // was "motion": 0 events carry it
 ] as const;
 
@@ -288,10 +288,40 @@ function fuzzyCity(text: string): string | undefined {
 export function isDiscoverySeekingMessage(message: string): boolean {
   const text = String(message || "").trim();
   if (!text) return false;
-  const hasVerb = /\b(find|vis|søg|anbefal|show|recommend|search|looking for|hvad sker|hvad kan)\b/iu.test(text);
-  const hasNoun = /\b(event|events|sted|steder|koncert|festival|jazz|aktivitet|aktiviteter|museum|restaurant|café|cafe|park|skov)\w*\b/iu.test(text);
-  const hasCity = /\b(kbh|cph|københavn|copenhagen|aarhus|århus|aalborg|ålborg|odense|malmö|malmo|frederikshavn)\b/iu.test(text);
+  const hasVerb = /\b(find|vis|søg|anbefal|show|recommend|search|looking for|hvad sker|hvad kan|er der)\b/iu.test(text);
+  const hasNoun = /\b(event|events|sted|steder|koncert|festival|jazz|aktivitet|aktiviteter|museum|restaurant|café|cafe|park|skov|turnering)\w*\b/iu.test(text);
+  const hasCity = /\b(kbh|cph|københavn|copenhagen|aarhus|århus|aalborg|ålborg|odense|malmö|malmo|frederikshavn|skagen|thisted)\b/iu.test(text);
   return (hasVerb && (hasNoun || hasCity)) || (hasNoun && hasCity);
+}
+
+/**
+ * The honest answer when the catalogue cannot answer the turn.
+ *
+ * The model path failed and the message was not a discovery question — nobody
+ * asked us to look anything up, so we must not report anything about a search.
+ * Measured on 4b924a1 (review 2026-09-21), where the outer gate was dropped:
+ * "hej, hvad kan du?", "tak for hjælpen", "godmorgen" and "Gem at jeg elsker
+ * jazz" all came back as "Jeg fandt ingen resultater med de valgte filtre." —
+ * a false statement about a search that was never made, from two Supabase
+ * queries that could not change the answer either way.
+ *
+ * 200 on purpose: an outage is ours to own, not the reader's to retry as an
+ * error, and the golden set requires a save command to stay 200 rather than
+ * 503. The copy says only what is true — we cannot answer right now — and
+ * claims neither results nor a save.
+ */
+export function formatNonCatalogueReply(message: string) {
+  const language = inferResponseLanguage(message);
+  return {
+    reply: language === "en"
+      ? "I can't answer that right now — please try again in a moment."
+      : "Det kan jeg ikke svare på lige nu — prøv igen om lidt.",
+    tool_calls_made: [],
+    place_ids: [],
+    event_ids: [],
+    suggested_tag_slugs: [],
+    degraded: true,
+  };
 }
 
 /** Placeholder / invented discovery prose without tool grounding. */
