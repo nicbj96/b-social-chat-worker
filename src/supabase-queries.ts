@@ -141,14 +141,30 @@ export async function searchRoutes(
   };
 }
 
-// Search places with optional filters
+// Search places with optional filters.
+//
+// Two phases, deliberately. Measured live 2026-09-21 on 148,122 places, role
+// anon (statement_timeout = 3s): the single-query version below returned
+// "57014 canceling statement due to statement timeout" for every filtered
+// places search. The reason was not the ordering index (since added:
+// 20260921070000_places_search_order_index) but the WIDTH of the tuple the
+// ORDER BY had to materialise before it could keep the best 8:
+//
+//   category + city, full column list (description + metadata jsonb)  5,994 ms
+//   category + city, id column only                                      36 ms
+//   category + city, narrow columns (no description/metadata)            37 ms
+//
+// Same plan, same 6,485 heap blocks in all three: fetching the wide tuple for
+// every candidate row is the entire cost. So phase one ranks on `id` alone -
+// which the index serves without touching the heap - and phase two fetches the
+// columns we actually return for those 8 ids by primary key.
 export async function searchPlaces(
   supabase: SupabaseClient,
   args: ToolCallArgs["search_places"]
 ) {
   let query = supabase
     .from("places")
-    .select("id, name, description, city, nearest_city, region, main_categories, tags, smart_tags, rating_avg, metadata")
+    .select("id")
     // NULLS LAST is the whole point. Only 2.3% of places carry a rating
     // (3,336 of 148,075), and Postgres sorts NULLs FIRST on a DESC order -- so
     // this was returning 144,739 unrated places ahead of every rated one, in
@@ -194,15 +210,36 @@ export async function searchPlaces(
     query = query.overlaps("tags", tagList);
   }
 
-  const { data, error } = await query;
+  const { data: ranked, error: rankError } = await query;
+
+  if (rankError) {
+    console.error("Places query error:", rankError);
+    return { results: [], error: rankError.message };
+  }
+
+  const ids = (ranked || []).map((p: any) => p.id).filter(Boolean);
+  // Nothing matched: do not spend a second round trip on an empty id list.
+  if (ids.length === 0) return { results: [] };
+
+  const { data, error } = await supabase
+    .from("places")
+    .select("id, name, description, city, nearest_city, region, main_categories, tags, smart_tags, rating_avg, metadata")
+    .in("id", ids);
 
   if (error) {
-    console.error("Places query error:", error);
+    console.error("Places fetch error:", error);
     return { results: [], error: error.message };
   }
 
+  // The id fetch has no meaningful order of its own, so restore the ranking the
+  // first query established (a Map lookup, not a second sort).
+  const rank = new Map(ids.map((id, index) => [id, index]));
+  const ordered = (data || []).slice().sort(
+    (a: any, b: any) => (rank.get(a.id) ?? ids.length) - (rank.get(b.id) ?? ids.length)
+  );
+
   return {
-    results: (data || []).map((p: any) => ({
+    results: ordered.map((p: any) => ({
       id: p.id,
       name: p.name,
       description: p.description,

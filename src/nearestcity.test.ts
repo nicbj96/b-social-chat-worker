@@ -4,18 +4,49 @@ import { searchEvents, searchPlaces } from "./supabase-queries";
 // 82.5% of places have no city (122,113 of 148,075, measured 2026-07-22), so
 // filtering on `city` alone made four fifths of the catalogue unreachable by any
 // city search. These assert the query asks for both columns.
+//
+// searchPlaces now runs in TWO phases (2026-09-21, statement-timeout fix): it
+// ranks on `id` alone, then fetches the wide columns for the chosen ids by
+// primary key. So this fake records each query separately, answers the id-only
+// query with ids (otherwise no second phase would ever run) and answers the id
+// fetch with rows. `calls` keeps exposing the RANKING query's filters and the
+// FULL column list, which is what the assertions below are about.
+const PLACE_IDS = ["p-1", "p-2"];
+const PLACE_ROWS = [
+  { id: "p-1", nearest_city: "Aarhus" },
+  { id: "p-2", nearest_city: null },
+];
+
 function fakeSupabase() {
-  const calls: { or?: string; ilike?: [string, string]; select?: string; orders: [string, unknown][] } = { orders: [] };
-  const q: any = {
-    select: (cols: string) => { calls.select = cols; return q; },
-    order: (col: string, opts?: unknown) => { calls.orders.push([col, opts]); return q; },
-    limit: () => q,
-    contains: () => q,
-    ilike: (col: string, val: string) => { calls.ilike = [col, val]; return q; },
-    or: (expr: string) => { calls.or = expr; return q; },
-    then: (res: (v: unknown) => unknown) => res({ data: [], error: null }),
+  type Rec = { or?: string; ilike?: [string, string]; select?: string; orders: [string, unknown][] };
+  const queries: Rec[] = [];
+  const from = () => {
+    const rec: Rec = { orders: [] };
+    queries.push(rec);
+    const q: any = {
+      select: (cols: string) => { rec.select = cols; return q; },
+      order: (col: string, opts?: unknown) => { rec.orders.push([col, opts]); return q; },
+      limit: () => q,
+      contains: () => q,
+      ilike: (col: string, val: string) => { rec.ilike = [col, val]; return q; },
+      or: (expr: string) => { rec.or = expr; return q; },
+      in: () => q,
+      then: (res: (v: unknown) => unknown) =>
+        rec.select === "id"
+          ? res({ data: PLACE_IDS.map((id) => ({ id })), error: null })
+          : res({ data: PLACE_ROWS, error: null }),
+    };
+    return q;
   };
-  return { client: { from: () => q }, calls };
+  const ranking = () => queries[0];
+  const fetch = () => queries[1];
+  const calls = {
+    get or() { return ranking()?.or; },
+    get ilike() { return ranking()?.ilike; },
+    get orders() { return ranking()?.orders ?? []; },
+    get select() { return fetch()?.select ?? ranking()?.select; },
+  };
+  return { client: { from } as any, calls };
 }
 
 describe("searchPlaces city matching", () => {
