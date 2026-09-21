@@ -19,7 +19,7 @@ import { guardedFetch } from "./fetchguard";
 import { fetchWeather, haversineKm, estimateTravelMinutes, normalizeMode, isValidLatLng } from "./context-tools";
 import { enforceRateLimit, enforceAiDailyBudget, chargeAiDailyBudget, type RateLimitEnv } from "./ratelimit";
 import { runAiCounted, aiCostSnapshot, setAiUsageReporter } from "./aiCost";
-import { aiBreakerIsOpen, formatFallbackReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
+import { aiBreakerIsOpen, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 
 export { RateLimitDurableObject } from "./rate-limit-do";
 
@@ -1043,6 +1043,33 @@ async function directDiscoveryFallback(
   return jsonResponse(formatFallbackReply(intent, places, events, language));
 }
 
+/**
+ * What a /chat turn gets once the model path has failed.
+ *
+ * The catalogue safety net exists for DISCOVERY questions. Running it for every
+ * parsed turn — what 4b924a1 did by dropping the outer gate — answered "hej,
+ * hvad kan du?", "godmorgen" and "Gem at jeg elsker jazz" with "Jeg fandt ingen
+ * resultater med de valgte filtre.": a claim about a search nobody asked for,
+ * paid for with two Supabase queries that could not have changed the answer.
+ *
+ * So the gate goes here, in front of EVERY failure path (breaker open, first AI
+ * call, follow-up AI call, umbrella catch), not just the outer one: only a turn
+ * that actually asks us to look something up may be answered from the
+ * catalogue. Everything else gets an honest 200 — not a 5xx, because the outage
+ * is ours, and not catalogue copy, because there is nothing to report.
+ */
+async function catalogueFallbackForTurn(
+  env: Env,
+  userMessages: ChatMessage[],
+  context: { user_prefs?: { city?: string } },
+): Promise<Response> {
+  const latest = latestUserMessage(userMessages);
+  if (!isDiscoverySeekingMessage(latest)) {
+    return jsonResponse(formatNonCatalogueReply(latest));
+  }
+  return await directDiscoveryFallback(env, userMessages, context);
+}
+
 async function handleChat(request: Request, env: Env, executionCtx: ExecutionContext): Promise<Response> {
   // Kept in the outer scope so the catch below can still answer a discovery
   // question after the model path has failed (see the catch for why).
@@ -1246,7 +1273,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
     // grounded database answer.
     if (aiBreakerIsOpen()) {
       console.error(JSON.stringify({ event: "ai_breaker_open", action: "direct_fallback" }));
-      return await directDiscoveryFallback(env, userMessages, ctx);
+      return await catalogueFallbackForTurn(env, userMessages, ctx);
     }
 
     // First AI call — may include tool calls
@@ -1266,7 +1293,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
         quota: isAiQuotaError(error),
         detail: String(error instanceof Error ? error.message : error).slice(0, 140),
       }));
-      return directDiscoveryFallback(env, userMessages, ctx);
+      return catalogueFallbackForTurn(env, userMessages, ctx);
     }
     recordAiSuccess();
 
@@ -1617,7 +1644,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
           quota: isAiQuotaError(error),
           detail: String(error instanceof Error ? error.message : error).slice(0, 140),
         }));
-        return directDiscoveryFallback(env, userMessages, ctx);
+        return catalogueFallbackForTurn(env, userMessages, ctx);
       }
 
       // Collect tag slugs from tool arguments (for live filter update on frontend)
@@ -1683,11 +1710,11 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
     // plain chitchat, which needs no tools, returned 200.)
     if (fallbackMessages) {
       try {
-        // A parsed /chat turn already has a question we can answer from the
-        // catalogue. Gating this on isDiscoverySeekingMessage left the live
-        // golden-set event/save prompts on the 503 path when a later throw
-        // (malformed tool JSON) skipped the inner AI catch.
-        return await directDiscoveryFallback(env, fallbackMessages, fallbackCtx);
+        // The catalogue answer is only for a turn that asked us to look
+        // something up. The 503 class this branch fixes (golden-set cases 1/2)
+        // is discovery-shaped and keeps directDiscoveryFallback; a chitchat or
+        // save turn must not be answered with "Jeg fandt ingen resultater".
+        return await catalogueFallbackForTurn(env, fallbackMessages, fallbackCtx);
       } catch (fallbackErr) {
         console.error("Chat fallback error:", fallbackErr);
       }

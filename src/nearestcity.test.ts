@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { searchPlaces } from "./supabase-queries";
+import { searchEvents, searchPlaces } from "./supabase-queries";
 
 // 82.5% of places have no city (122,113 of 148,075, measured 2026-07-22), so
 // filtering on `city` alone made four fifths of the catalogue unreachable by any
@@ -48,6 +48,71 @@ describe("searchPlaces city matching", () => {
     await searchPlaces(client as any, { city: "Aar,hus)(%" } as any);
     expect(calls.or).not.toContain(",nearest_city.ilike.%Aar,");
     expect(calls.or).toContain("Aarhus");
+  });
+});
+
+// Review 2026-09-21, blocker 3: searchEvents swapped ilike("location", ...) for
+// an or() over two spellings on the four busiest cities, with no test. The fake
+// client cannot validate PostgREST or() semantics, so this locks the SHAPE:
+// both needles present for an aliased city, the single ilike kept for every
+// other city, and nothing that would break the expression reaching the query.
+function fakeEventsSupabase() {
+  const calls: { or?: string; ilike?: [string, string] } = {};
+  const q: any = {
+    select: () => q,
+    gte: () => q,
+    order: () => q,
+    limit: () => q,
+    eq: () => q,
+    contains: () => q,
+    overlaps: () => q,
+    ilike: (col: string, val: string) => { calls.ilike = [col, val]; return q; },
+    or: (expr: string) => { calls.or = expr; return q; },
+    then: (res: (v: unknown) => unknown) => res({ data: [], error: null }),
+  };
+  return { client: { from: () => q }, calls };
+}
+
+describe("searchEvents city matching", () => {
+  it("asks for both København and Copenhagen in one or()", async () => {
+    const { client, calls } = fakeEventsSupabase();
+    await searchEvents(client as any, { city: "København" } as any);
+    expect(calls.or).toBeTruthy();
+    expect(calls.or).toContain("location.ilike.%København%");
+    expect(calls.or).toContain("location.ilike.%Copenhagen%");
+    expect(calls.ilike).toBeUndefined(); // the or() replaces the single ilike
+  });
+
+  it("asks for both Aarhus and Århus whichever spelling the caller used", async () => {
+    for (const city of ["Aarhus", "Århus"]) {
+      const { client, calls } = fakeEventsSupabase();
+      await searchEvents(client as any, { city } as any);
+      expect(calls.or, city).toContain("location.ilike.%Aarhus%");
+      expect(calls.or, city).toContain("location.ilike.%Århus%");
+    }
+  });
+
+  it("asks for both Aalborg and Ålborg", async () => {
+    const { client, calls } = fakeEventsSupabase();
+    await searchEvents(client as any, { city: "Aalborg" } as any);
+    expect(calls.or).toContain("location.ilike.%Aalborg%");
+    expect(calls.or).toContain("location.ilike.%Ålborg%");
+  });
+
+  it("keeps a single ilike on location for a city with one spelling", async () => {
+    const { client, calls } = fakeEventsSupabase();
+    await searchEvents(client as any, { city: "Odense" } as any);
+    expect(calls.ilike).toEqual(["location", "%Odense%"]);
+    expect(calls.or).toBeUndefined();
+  });
+
+  it("never lets a stray comma, paren or percent reach the or() expression", async () => {
+    const { client, calls } = fakeEventsSupabase();
+    await searchEvents(client as any, { city: "Aar,hus)(%" } as any);
+    const parts = String(calls.or).split(",");
+    expect(parts).toHaveLength(2);
+    expect(parts.every((p) => /^location\.ilike\.%.+%$/.test(p))).toBe(true);
+    expect(calls.or).toContain("location.ilike.%Aarhus%");
   });
 });
 

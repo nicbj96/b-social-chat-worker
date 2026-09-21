@@ -90,6 +90,56 @@ describe("third-party outage — Workers AI down", () => {
     }
   });
 
+  // Review 2026-09-21, blocker 2. With the outer gate removed (4b924a1) every
+  // parsed turn took the catalogue path: measured on the branch,
+  // "hej, hvad kan du?" → "Jeg fandt ingen resultater med de valgte filtre."
+  // (degraded=true) — a claim about a search nobody made, on top of two
+  // Supabase queries that could not change the answer.
+  it("pure chitchat is never answered from the catalogue when the model is down", async () => {
+    vi.mocked(searchPlaces).mockClear();
+    vi.mocked(searchEvents).mockClear();
+    const aiRun = vi.fn().mockRejectedValue(new Error("Workers AI 500 upstream"));
+    const response = await worker.fetch!(chatRequest("hej, hvad kan du?"), environment(aiRun), executionContext());
+
+    expect(aiRun).toHaveBeenCalled(); // it really tried the model: this is the failure path
+    expect(response.status).toBe(200); // an outage is ours, not a 5xx for the reader
+    const body: any = await response.json();
+    expect(body.error).toBeUndefined();
+    expect(body.degraded).toBe(true);
+    expect(body.place_ids).toEqual([]);
+    expect(body.event_ids).toEqual([]);
+    // It still answers — just not with anything about a search.
+    expect(String(body.reply).length).toBeGreaterThan(0);
+    expect(String(body.reply)).not.toMatch(/Jeg fandt ingen resultater/);
+    expect(String(body.reply)).not.toMatch(/Her er resultater direkte fra B-Social/);
+    // ...and it did not spend two database queries answering it.
+    expect(vi.mocked(searchPlaces)).not.toHaveBeenCalled();
+    expect(vi.mocked(searchEvents)).not.toHaveBeenCalled();
+  });
+
+  // The save command is the golden-set case 6 prompt: it must stay 200 (a
+  // 503 there was one of the three failures this branch exists to fix) without
+  // ever claiming the save happened, and without catalogue copy either.
+  it("a save command gets an honest 200 — no false save, no catalogue copy", async () => {
+    vi.mocked(searchPlaces).mockClear();
+    vi.mocked(searchEvents).mockClear();
+    const aiRun = vi.fn().mockRejectedValue(new Error("Workers AI 500 upstream"));
+    const response = await worker.fetch!(chatRequest("Gem at jeg elsker jazz"), environment(aiRun), executionContext());
+
+    expect(response.status).toBe(200);
+    const body: any = await response.json();
+    expect(body.error).toBeUndefined();
+    expect(body.degraded).toBe(true);
+    expect(body.place_ids).toEqual([]);
+    expect(body.event_ids).toEqual([]);
+    expect(String(body.reply).length).toBeGreaterThan(0);
+    expect(String(body.reply)).not.toMatch(/har gemt|er gemt/i);
+    expect(String(body.reply)).not.toMatch(/Jeg fandt ingen resultater/);
+    expect(String(body.reply)).not.toMatch(/Her er resultater direkte fra B-Social/);
+    expect(vi.mocked(searchPlaces)).not.toHaveBeenCalled();
+    expect(vi.mocked(searchEvents)).not.toHaveBeenCalled();
+  });
+
   it("malformed tool-call JSON must not 503 a valid /chat turn", async () => {
     // Live 503s were the OUTER catch: the model answered, then
     // JSON.parse(toolCall.function.arguments) threw, and

@@ -294,6 +294,36 @@ export function isDiscoverySeekingMessage(message: string): boolean {
   return (hasVerb && (hasNoun || hasCity)) || (hasNoun && hasCity);
 }
 
+/**
+ * The honest answer when the catalogue cannot answer the turn.
+ *
+ * The model path failed and the message was not a discovery question — nobody
+ * asked us to look anything up, so we must not report anything about a search.
+ * Measured on 4b924a1 (review 2026-09-21), where the outer gate was dropped:
+ * "hej, hvad kan du?", "tak for hjælpen", "godmorgen" and "Gem at jeg elsker
+ * jazz" all came back as "Jeg fandt ingen resultater med de valgte filtre." —
+ * a false statement about a search that was never made, from two Supabase
+ * queries that could not change the answer either way.
+ *
+ * 200 on purpose: an outage is ours to own, not the reader's to retry as an
+ * error, and the golden set requires a save command to stay 200 rather than
+ * 503. The copy says only what is true — we cannot answer right now — and
+ * claims neither results nor a save.
+ */
+export function formatNonCatalogueReply(message: string) {
+  const language = inferResponseLanguage(message);
+  return {
+    reply: language === "en"
+      ? "I can't answer that right now — please try again in a moment."
+      : "Det kan jeg ikke svare på lige nu — prøv igen om lidt.",
+    tool_calls_made: [],
+    place_ids: [],
+    event_ids: [],
+    suggested_tag_slugs: [],
+    degraded: true,
+  };
+}
+
 /** Placeholder / invented discovery prose without tool grounding. */
 /**
  * True when the model wrote a TOOL CALL as prose instead of calling the tool —
