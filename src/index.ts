@@ -836,8 +836,13 @@ const SEARCH_PLACES_DEADLINE_MS = 2500;
  * Aarhus" resolves to city Aarhus + category mad-drikke exactly as the chat
  * path resolves it — one parser, one set of city spellings, one ordering.
  */
-async function searchPlacesForQuery(env: Env, query: string, count: number): Promise<any[]> {
-  const intent = inferDiscoveryIntent(query);
+async function searchPlacesForQuery(
+  env: Env,
+  query: string,
+  count: number,
+  contextCity?: string,
+): Promise<any[]> {
+  const intent = inferDiscoveryIntent(query, contextCity);
   const supabase = createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY);
   const work = searchPlaces(
     supabase,
@@ -1431,27 +1436,40 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
 
               switch (fnName) {
                 case "semantic_search": {
-                  // Use our deployed /search flow internally
+                  // EVENTS: embedding -> match_events, as before.
+                  // PLACES: the catalogue path, NOT match_places. Same root
+                  // cause as /search: `places` has no vector index, so
+                  // match_places is a full scan that cannot finish inside the
+                  // anon statement_timeout -- measured 2026-09-21, "Find
+                  // spisesteder i Aarhus" came back with place_ids [] after
+                  // ~4s of waiting. The catalogue path answers the same
+                  // question in tens of ms, and it is already the shape the
+                  // grounded fallback trusts.
                   try {
-                    const emb: any = await runAiCounted(env.AI, "@cf/baai/bge-m3", { text: [fnArgs.query] });
-                    const vec = emb?.data?.[0];
-                    if (!vec) { result = { error: "embedding failed" }; break; }
-                    const sbHeaders = { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}`, "Content-Type": "application/json" };
                     const kind = fnArgs.kind ?? "both";
-                    // Location awareness (2026-07-22): a named city becomes a
-                    // real bounding box on both RPCs. Unknown city → null →
-                    // unfiltered, never an empty answer.
+                    // Location awareness (2026-07-22): a named city still
+                    // becomes a real bounding box on match_events. Places are
+                    // narrowed by city/nearest_city inside the catalogue query.
                     const bbox = cityToBBox(fnArgs.city);
                     const bboxParams = bbox
                       ? { filter_bbox_n: bbox.n, filter_bbox_s: bbox.s, filter_bbox_e: bbox.e, filter_bbox_w: bbox.w }
                       : {};
                     const out: any = { events: [], places: [] };
                     if (kind === "events" || kind === "both") {
-                      const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_events`, {
-                        method: "POST", headers: sbHeaders,
-                        body: JSON.stringify({ query_embedding: vec, match_count: 8, match_threshold: 0.3, filter_country: fnArgs.country ?? bbox?.country ?? null, ...bboxParams }),
-                      });
-                      out.events = await r.json();
+                      // An embedding failure costs the event half only: it must
+                      // not turn into a tool error the model answers around.
+                      const emb: any = await runAiCounted(env.AI, "@cf/baai/bge-m3", { text: [fnArgs.query] });
+                      const vec = emb?.data?.[0];
+                      if (vec) {
+                        const sbHeaders = { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}`, "Content-Type": "application/json" };
+                        out.events = await rpcResultRows(`${env.SUPABASE_URL}/rest/v1/rpc/match_events`, sbHeaders, {
+                          query_embedding: vec,
+                          match_count: 8,
+                          match_threshold: 0.3,
+                          filter_country: fnArgs.country ?? bbox?.country ?? null,
+                          ...bboxParams,
+                        });
+                      }
                       (out.events || []).forEach((e: any) => {
                         if (!e?.id) return;
                         collectedEventIds.push(e.id);
@@ -1459,12 +1477,15 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                       });
                     }
                     if (kind === "places" || kind === "both") {
-                      const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_places`, {
-                        method: "POST", headers: sbHeaders,
-                        body: JSON.stringify({ query_embedding: vec, match_count: 8, match_threshold: 0.3, filter_country: fnArgs.country ?? bbox?.country ?? null, ...bboxParams }),
-                      });
-                      out.places = await r.json();
-                      (out.places || []).forEach((p: any) => {
+                      const placeQuery = String(fnArgs.query ?? "").trim();
+                      // No query text and no city is nothing to search on: an
+                      // unfiltered top-8 of the catalogue would be an answer to
+                      // a question nobody asked.
+                      const found = placeQuery || fnArgs.city
+                        ? await searchPlacesForQuery(env, placeQuery, 8, fnArgs.city)
+                        : [];
+                      out.places = found;
+                      found.forEach((p: any) => {
                         if (!p?.id) return;
                         collectedPlaceIds.push(p.id);
                         collectedPlaces.push({ id: p.id, name: p.name, city: p.city });

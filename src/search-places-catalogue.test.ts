@@ -271,3 +271,49 @@ describe("POST /search — events keep the vector path, and the shape holds", ()
     err.mockRestore();
   });
 });
+
+describe("POST /chat - the model's semantic_search tool answers places from the catalogue", () => {
+  it("returns catalogue place_ids and never calls match_places", async () => {
+    const urls = installFetch();
+    // First model turn asks for a place search; the second answers with it.
+    const aiRun = vi.fn()
+      .mockResolvedValueOnce({
+        response: "",
+        tool_calls: [
+          {
+            id: "call_1",
+            function: {
+              name: "semantic_search",
+              arguments: JSON.stringify({ query: "hyggeligt spisested", city: "Aarhus", kind: "places" }),
+            },
+          },
+        ],
+      })
+      .mockResolvedValue({ response: "Her er to steder i Aarhus." });
+
+    const response = await worker.fetch!(
+      new Request("https://worker.example/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.30" },
+        body: JSON.stringify({ messages: [{ role: "user", content: "Find spisesteder i Aarhus" }] }),
+      }),
+      environment(aiRun),
+      executionContext(),
+    );
+
+    expect(response.status).toBe(200);
+    const body: any = await response.json();
+    expect(body.error).toBeUndefined();
+    expect(urls.filter((u) => u.includes("match_places"))).toEqual([]);
+    expect(body.place_ids).toEqual([
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+    ]);
+    // The city the model passed is threaded into the catalogue filter.
+    expect(vi.mocked(searchPlaces)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ city: "Aarhus" }),
+      8,
+    );
+  });
+});
