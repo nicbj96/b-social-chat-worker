@@ -160,8 +160,13 @@ export async function searchRoutes(
 // columns we actually return for those 8 ids by primary key.
 export async function searchPlaces(
   supabase: SupabaseClient,
-  args: ToolCallArgs["search_places"]
+  args: ToolCallArgs["search_places"],
+  limit = 8
 ) {
+  // The same narrow-then-fetch shape serves /search, which asks for up to 50
+  // rows instead of the chat's 8. Clamped here rather than trusted: the value
+  // arrives from a public request body.
+  const rowLimit = Number.isFinite(limit) ? Math.min(50, Math.max(1, Math.floor(limit))) : 8;
   let query = supabase
     .from("places")
     .select("id")
@@ -178,7 +183,7 @@ export async function searchPlaces(
     // imaged. Showing a reader a place we know nothing about is the worse
     // answer even when neither has a rating.
     .order("quality_score", { ascending: false, nullsFirst: false })
-    .limit(8);
+    .limit(rowLimit);
 
   if (args.city) {
     // Match city OR nearest_city. 82.5% of places have NO city -- measured

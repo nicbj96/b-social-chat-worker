@@ -806,8 +806,126 @@ async function handleEmbed(request: Request, env: Env): Promise<Response> {
 }
 
 // ── Semantic search endpoint ───────────────────────────────────────
-// Query text → embedding → pgvector match via Supabase RPC
+// EVENTS: query text → embedding → pgvector match via Supabase RPC.
+// PLACES: the catalogue path. Deliberately not pgvector — see below.
+//
+// MEASURED LIVE 2026-09-22 (public endpoint, 148,122 places, role anon with
+// statement_timeout = 3s):
+//
+//   POST /search {query:"spisesteder Aarhus", kind:"places"}
+//     -> HTTP 200 after ~3.99s, with
+//        places = {"code":"57014","message":"canceling statement due to
+//                   statement timeout"}
+//
+// Two defects in one response. `places` has NO vector index, so match_places
+// is a full scan that cannot finish inside 3s — the only route to places was
+// the one route that always failed, and the caller waited the full timeout to
+// receive nothing. And a failed RPC was passed through verbatim, so the field
+// the /soeg frontend reads as a list was a PostgREST error OBJECT.
+//
+// The catalogue path (filter first, rank on `id`, then fetch the wide columns
+// by primary key — supabase-queries.ts searchPlaces) answers the same question
+// in tens of milliseconds, so that is what serves place queries now. The vector
+// scan is not a fallback to wait for; it is not on the request path at all.
+const SEARCH_PLACES_DEADLINE_MS = 2500;
+
+/**
+ * Places for a free-text query, from the catalogue.
+ *
+ * The intent is parsed by the chat fallback's own parser, so "spisesteder
+ * Aarhus" resolves to city Aarhus + category mad-drikke exactly as the chat
+ * path resolves it — one parser, one set of city spellings, one ordering.
+ */
+async function searchPlacesForQuery(env: Env, query: string, count: number): Promise<any[]> {
+  const intent = inferDiscoveryIntent(query);
+  const supabase = createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY);
+  const work = searchPlaces(
+    supabase,
+    { city: intent.city, category: intent.placeCategory },
+    count,
+  ).catch((err: any) => {
+    // Public endpoint: the exception text goes to the log, never to the caller.
+    console.error("Places search failed:", err);
+    return { results: [] as any[], error: "query failed" };
+  });
+
+  // Bounded on purpose. The catalogue path is fast, but this endpoint is public
+  // and a slow database must not become a hanging request: an empty array is a
+  // shape the caller can act on, a request that never answers is not.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result: any = await Promise.race([
+      work,
+      new Promise((resolve) => {
+        timer = setTimeout(
+          () => resolve({ results: [] as any[], error: "deadline" }),
+          SEARCH_PLACES_DEADLINE_MS,
+        );
+      }),
+    ]);
+    return Array.isArray(result?.results) ? result.results : [];
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Vector-matched events for a free-text query.
+ *
+ * An embedding failure does not become a 5xx: events normalise to [] and the
+ * caller keeps whatever the place half produced. /soeg treats an empty result
+ * as "path A found nothing" and falls back to /chat, which is the same outcome
+ * a 500 produced — without taking the whole response down with it.
+ */
+async function searchEventsForQuery(
+  env: Env,
+  query: string,
+  count: number,
+  threshold: number,
+  country: string | undefined,
+  sbHeaders: Record<string, string>,
+): Promise<any[]> {
+  let vec: number[] | undefined;
+  try {
+    const emb: any = await runAiCounted(env.AI, "@cf/baai/bge-m3", { text: [query] });
+    vec = emb?.data?.[0];
+  } catch (err) {
+    console.error("Search embedding failed:", err);
+  }
+  if (!vec) return [];
+
+  return await rpcResultRows(`${env.SUPABASE_URL}/rest/v1/rpc/match_events`, sbHeaders, {
+    query_embedding: vec,
+    match_count: count,
+    match_threshold: threshold,
+    filter_country: country ?? null,
+  });
+}
+
+/**
+ * Rows from a Supabase RPC, always as an array.
+ *
+ * PostgREST reports a failed RPC as a JSON OBJECT ({code:"57014", …}), which
+ * this endpoint used to hand to the caller as if it were the result list. A
+ * search that failed has to read as "no rows", never as a record the caller
+ * has to guess at.
+ */
+async function rpcResultRows(
+  url: string,
+  headers: Record<string, string>,
+  body: unknown,
+): Promise<any[]> {
+  const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+  const payload: any = await r.json().catch(() => null);
+  if (Array.isArray(payload)) return payload;
+  console.error("Search RPC returned a non-array payload:", payload?.message ?? payload);
+  return [];
+}
+
 async function handleSemanticSearch(request: Request, env: Env): Promise<Response> {
+  // The response SHAPE is part of the contract: `events` and `places` are
+  // arrays on every path out of this handler, including the failure paths.
+  const out: { events: any[]; places: any[] } = { events: [], places: [] };
   try {
     const body = (await request.json()) as {
       query: string;
@@ -815,6 +933,9 @@ async function handleSemanticSearch(request: Request, env: Env): Promise<Respons
       count?: number;
       threshold?: number;
       country?: string;
+      /** Vector-path only. Accepted for compatibility, but places are no
+       *  longer a match_places call, so a caller's bbox narrows nothing
+       *  today — the place filter is city + category (see searchPlaces). */
       bbox?: { n: number; s: number; e: number; w: number };
     };
     if (!body.query) return jsonResponse({ error: "query required" }, 400);
@@ -822,10 +943,6 @@ async function handleSemanticSearch(request: Request, env: Env): Promise<Respons
     // C3 — clamp the query length before embedding (cost/abuse guard).
     const query = clampString(body.query, 1000);
     if (query.trim().length === 0) return jsonResponse({ error: "query required" }, 400);
-
-    const emb: any = await runAiCounted(env.AI, "@cf/baai/bge-m3", { text: [query] });
-    const vec = emb?.data?.[0];
-    if (!vec) return jsonResponse({ error: "embedding failed" }, 500);
 
     const kind = body.kind ?? "both";
     // C3 — clamp match_count to [1,50] and threshold to [0,1] so an absurd
@@ -839,43 +956,26 @@ async function handleSemanticSearch(request: Request, env: Env): Promise<Respons
       "Content-Type": "application/json",
     };
 
-    const out: any = { events: [], places: [] };
+    const wantsPlaces = kind === "places" || kind === "both";
+    const wantsEvents = kind === "events" || kind === "both";
 
-    if (kind === "events" || kind === "both") {
-      const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_events`, {
-        method: "POST",
-        headers: sbHeaders,
-        body: JSON.stringify({
-          query_embedding: vec,
-          match_count: count,
-          match_threshold: threshold,
-          filter_country: body.country ?? null,
-        }),
-      });
-      out.events = await r.json();
-    }
-    if (kind === "places" || kind === "both") {
-      const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_places`, {
-        method: "POST",
-        headers: sbHeaders,
-        body: JSON.stringify({
-          query_embedding: vec,
-          match_count: count,
-          match_threshold: threshold,
-          filter_country: body.country ?? null,
-          filter_bbox_n: body.bbox?.n ?? null,
-          filter_bbox_s: body.bbox?.s ?? null,
-          filter_bbox_e: body.bbox?.e ?? null,
-          filter_bbox_w: body.bbox?.w ?? null,
-        }),
-      });
-      out.places = await r.json();
-    }
+    // Both halves run together: neither can delay the other, which is what let
+    // a 4s place timeout sit in front of an events answer that took 80ms.
+    const [places, events] = await Promise.all([
+      wantsPlaces ? searchPlacesForQuery(env, query, count) : Promise.resolve([] as any[]),
+      wantsEvents
+        ? searchEventsForQuery(env, query, count, threshold, body.country, sbHeaders)
+        : Promise.resolve([] as any[]),
+    ]);
+
+    out.places = places;
+    out.events = events;
     return jsonResponse(out);
   } catch (err: any) {
     // Public endpoint: the exception text goes to the log, never to the caller.
+    // The empty arrays ride along so the caller's list handling cannot break.
     console.error("Search error:", err);
-    return jsonResponse({ error: "search failed" }, 500);
+    return jsonResponse({ error: "search failed", ...out }, 500);
   }
 }
 
