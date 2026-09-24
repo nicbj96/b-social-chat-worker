@@ -20,6 +20,7 @@ import { fetchWeather, haversineKm, estimateTravelMinutes, normalizeMode, isVali
 import { enforceRateLimit, enforceAiDailyBudget, chargeAiDailyBudget, type RateLimitEnv } from "./ratelimit";
 import { runAiCounted, aiCostSnapshot, setAiUsageReporter } from "./aiCost";
 import { aiBreakerIsOpen, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
+import type { DiscoveryIntent } from "./discovery-fallback";
 
 export { RateLimitDurableObject } from "./rate-limit-do";
 
@@ -806,26 +807,223 @@ async function handleEmbed(request: Request, env: Env): Promise<Response> {
 }
 
 // ── Semantic search endpoint ───────────────────────────────────────
-// Query text → embedding → pgvector match via Supabase RPC
-async function handleSemanticSearch(request: Request, env: Env): Promise<Response> {
+// EVENTS: query text → embedding → pgvector match via Supabase RPC.
+// PLACES: the catalogue path. Deliberately not pgvector — see below.
+//
+// MEASURED LIVE 2026-09-22 (public endpoint, 148,122 places, role anon with
+// statement_timeout = 3s):
+//
+//   POST /search {query:"spisesteder Aarhus", kind:"places"}
+//     -> HTTP 200 after ~3.99s, with
+//        places = {"code":"57014","message":"canceling statement due to
+//                   statement timeout"}
+//
+// Two defects in one response. `places` has NO vector index, so match_places
+// is a full scan that cannot finish inside 3s — the only route to places was
+// the one route that always failed, and the caller waited the full timeout to
+// receive nothing. And a failed RPC was passed through verbatim, so the field
+// the /soeg frontend reads as a list was a PostgREST error OBJECT.
+//
+// The catalogue path (filter first, rank on `id`, then fetch the wide columns
+// by primary key — supabase-queries.ts searchPlaces) answers the same question
+// in tens of milliseconds, so that is what serves place queries now. The vector
+// scan is not a fallback to wait for; it is not on the request path at all.
+const SEARCH_PLACES_DEADLINE_MS = 2500;
+
+/**
+ * Why one half of a search came back empty.
+ *
+ * An empty array carried three different meanings at once — nothing matched,
+ * the query was never run, and the backend threw — so the model told the reader
+ * "no places found" whether or not a search had happened. The coarse reason
+ * travels with the empty array now, to the caller of /search and to the model
+ * that called the tool. Coarse on purpose: this endpoint is public, so the
+ * upstream message stays in the log.
+ *
+ *   error    something went wrong: "query_failed", "deadline", "rpc_failed",
+ *            "rpc_unreachable", "embedding_failed"
+ *   skipped  nothing was searched, deliberately: "no_place_intent",
+ *            "no_city_or_category", "no_query_or_city"
+ */
+type SearchOutcome = { results: any[]; error?: string; skipped?: string };
+
+/**
+ * Is a place search warranted at all?
+ *
+ * H1, measured live 2026-09-22: the model's semantic_search passed the parsed
+ * `city` and the catalogue query ran with no category, so "jazz koncert i
+ * Aarhus" — an events-only question — was answered with Aarhus' best-rated
+ * cafes and restaurants. Two rules close that:
+ *
+ *   1. PLACE INTENT ONLY. When the query's own intent is events-only there is
+ *      no place question to answer; returning the city's top-N anyway invents a
+ *      question and then answers it.
+ *   2. NEVER THE NATIONAL TOP-N. With no city and no category the catalogue
+ *      query is an unfiltered ORDER BY rating_avg over 148k rows — the top of
+ *      the country, which is an answer to nothing. It is also the class of
+ *      query that put "camping niffer — tozeur" at the top of a Danish search
+ *      before the NULLS LAST fix.
+ *
+ * Same parser and same routing as directDiscoveryFallback, so the place paths
+ * cannot drift apart.
+ */
+function placeSearchGate(intent: DiscoveryIntent): { skipped?: string } {
+  if (intent.kind === "events") return { skipped: "no_place_intent" };
+  if (!intent.city && !intent.placeCategory) return { skipped: "no_city_or_category" };
+  return {};
+}
+
+async function searchPlacesForQuery(
+  env: Env,
+  query: string,
+  count: number,
+  contextCity?: string,
+): Promise<SearchOutcome> {
+  const intent = inferDiscoveryIntent(query, contextCity);
+  // H1 — no place intent, or nothing to narrow on: the catalogue is not asked.
+  const gate = placeSearchGate(intent);
+  if (gate.skipped) return { results: [], skipped: gate.skipped };
+
+  const supabase = createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY);
+  const work = searchPlaces(
+    supabase,
+    { city: intent.city, category: intent.placeCategory },
+    count,
+  ).catch((err: any) => {
+    // Public endpoint: the exception text goes to the log, never to the caller.
+    console.error("Places search failed:", err);
+    return { results: [] as any[], error: "query_failed" };
+  });
+
+  // Bounded on purpose. The catalogue path is fast, but this endpoint is public
+  // and a slow database must not become a hanging request: an empty array is a
+  // shape the caller can act on, a request that never answers is not.
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const body = (await request.json()) as {
-      query: string;
-      kind?: "events" | "places" | "both";
-      count?: number;
-      threshold?: number;
-      country?: string;
-      bbox?: { n: number; s: number; e: number; w: number };
-    };
-    if (!body.query) return jsonResponse({ error: "query required" }, 400);
+    const result: any = await Promise.race([
+      work,
+      new Promise((resolve) => {
+        timer = setTimeout(
+          () => resolve({ results: [] as any[], error: "deadline" }),
+          SEARCH_PLACES_DEADLINE_MS,
+        );
+      }),
+    ]);
+    const results = Array.isArray(result?.results) ? result.results : [];
+    // The catalogue can also answer with an upstream message ("canceling
+    // statement due to statement timeout"). The caller gets a coarse code; the
+    // message stays in the log with the rest of the diagnostics.
+    if (result?.error) {
+      return { results, error: result.error === "deadline" ? "deadline" : "query_failed" };
+    }
+    return { results };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Vector-matched events for a free-text query.
+ *
+ * An embedding failure does not become a 5xx: events normalise to [] and the
+ * caller keeps whatever the place half produced. /soeg treats an empty result
+ * as "path A found nothing" and falls back to /chat, which is the same outcome
+ * a 500 produced — without taking the whole response down with it.
+ */
+async function searchEventsForQuery(
+  env: Env,
+  query: string,
+  count: number,
+  threshold: number,
+  country: string | undefined,
+  sbHeaders: Record<string, string>,
+): Promise<SearchOutcome> {
+  let vec: number[] | undefined;
+  try {
+    const emb: any = await runAiCounted(env.AI, "@cf/baai/bge-m3", { text: [query] });
+    vec = emb?.data?.[0];
+  } catch (err) {
+    console.error("Search embedding failed:", err);
+  }
+  // M3 — an empty array has to mean ONE thing. "No vector" is a failure, not an
+  // empty result, so it travels with a reason instead of silently joining the
+  // case where the search ran and genuinely matched nothing.
+  if (!vec) return { results: [], error: "embedding_failed" };
+
+  let failed = false;
+  let results: any[] = [];
+  try {
+    results = await rpcResultRows(
+      `${env.SUPABASE_URL}/rest/v1/rpc/match_events`,
+      sbHeaders,
+      {
+        query_embedding: vec,
+        match_count: count,
+        match_threshold: threshold,
+        filter_country: country ?? null,
+      },
+      () => { failed = true; },
+    );
+  } catch (err) {
+    console.error("Events search failed:", err);
+    failed = true;
+  }
+  return failed ? { results, error: "rpc_failed" } : { results };
+}
+
+/**
+ * Rows from a Supabase RPC, always as an array.
+ *
+ * PostgREST reports a failed RPC as a JSON OBJECT ({code:"57014", …}), which
+ * this endpoint used to hand to the caller as if it were the result list. A
+ * search that failed has to read as "no rows", never as a record the caller
+ * has to guess at.
+ */
+async function rpcResultRows(
+  url: string,
+  headers: Record<string, string>,
+  body: unknown,
+  /** Called when the payload was NOT a row list, so a caller that must tell a
+   *  failed search from an empty one can record it (M3). */
+  onFailure?: () => void,
+): Promise<any[]> {
+  const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+  const payload: any = await r.json().catch(() => null);
+  if (Array.isArray(payload)) return payload;
+  console.error("Search RPC returned a non-array payload:", payload?.message ?? payload);
+  onFailure?.();
+  return [];
+}
+
+async function handleSemanticSearch(request: Request, env: Env): Promise<Response> {
+  // The response SHAPE is part of the contract: `events` and `places` are
+  // arrays on EVERY path out of this handler — the 400s and the 500 included —
+  // and a failure carries a coarse reason BESIDE the empty array, so the caller
+  // can tell "nothing matched" from "the search did not run" (M3).
+  const out: {
+    events: any[];
+    places: any[];
+    places_skipped?: string;
+    places_error?: string;
+    events_error?: string;
+  } = { events: [], places: [] };
+
+  // M2 — a body that is not JSON is the CALLER's mistake, so it is a 400, not
+  // the 500 the umbrella catch produced by reading the body inside it. Reading
+  // it out here also keeps "you sent me junk" distinguishable from "we broke".
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: "invalid JSON body", ...out }, 400);
+  }
+
+  try {
+    if (!body?.query) return jsonResponse({ error: "query required", ...out }, 400);
 
     // C3 — clamp the query length before embedding (cost/abuse guard).
     const query = clampString(body.query, 1000);
-    if (query.trim().length === 0) return jsonResponse({ error: "query required" }, 400);
-
-    const emb: any = await runAiCounted(env.AI, "@cf/baai/bge-m3", { text: [query] });
-    const vec = emb?.data?.[0];
-    if (!vec) return jsonResponse({ error: "embedding failed" }, 500);
+    if (query.trim().length === 0) return jsonResponse({ error: "query required", ...out }, 400);
 
     const kind = body.kind ?? "both";
     // C3 — clamp match_count to [1,50] and threshold to [0,1] so an absurd
@@ -839,43 +1037,32 @@ async function handleSemanticSearch(request: Request, env: Env): Promise<Respons
       "Content-Type": "application/json",
     };
 
-    const out: any = { events: [], places: [] };
+    const wantsPlaces = kind === "places" || kind === "both";
+    const wantsEvents = kind === "events" || kind === "both";
 
-    if (kind === "events" || kind === "both") {
-      const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_events`, {
-        method: "POST",
-        headers: sbHeaders,
-        body: JSON.stringify({
-          query_embedding: vec,
-          match_count: count,
-          match_threshold: threshold,
-          filter_country: body.country ?? null,
-        }),
-      });
-      out.events = await r.json();
-    }
-    if (kind === "places" || kind === "both") {
-      const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_places`, {
-        method: "POST",
-        headers: sbHeaders,
-        body: JSON.stringify({
-          query_embedding: vec,
-          match_count: count,
-          match_threshold: threshold,
-          filter_country: body.country ?? null,
-          filter_bbox_n: body.bbox?.n ?? null,
-          filter_bbox_s: body.bbox?.s ?? null,
-          filter_bbox_e: body.bbox?.e ?? null,
-          filter_bbox_w: body.bbox?.w ?? null,
-        }),
-      });
-      out.places = await r.json();
-    }
+    // Both halves run together: neither can delay the other, which is what let
+    // a 4s place timeout sit in front of an events answer that took 80ms.
+    // Each half answers with its rows PLUS why it has none, if it has none.
+    const [placeOutcome, eventOutcome] = await Promise.all([
+      wantsPlaces
+        ? searchPlacesForQuery(env, query, count)
+        : Promise.resolve({ results: [] } as SearchOutcome),
+      wantsEvents
+        ? searchEventsForQuery(env, query, count, threshold, body.country, sbHeaders)
+        : Promise.resolve({ results: [] } as SearchOutcome),
+    ]);
+
+    out.places = placeOutcome.results;
+    if (placeOutcome.skipped) out.places_skipped = placeOutcome.skipped;
+    if (placeOutcome.error) out.places_error = placeOutcome.error;
+    out.events = eventOutcome.results;
+    if (eventOutcome.error) out.events_error = eventOutcome.error;
     return jsonResponse(out);
   } catch (err: any) {
     // Public endpoint: the exception text goes to the log, never to the caller.
+    // The empty arrays ride along so the caller's list handling cannot break.
     console.error("Search error:", err);
-    return jsonResponse({ error: "search failed" }, 500);
+    return jsonResponse({ error: "search failed", ...out }, 500);
   }
 }
 
@@ -1023,11 +1210,17 @@ async function directDiscoveryFallback(
   let events: any[] = [];
 
   if (intent.kind === "places" || intent.kind === "both") {
-    const result = await searchPlaces(supabase, {
-      city: intent.city,
-      category: intent.placeCategory,
-    });
-    places = result.results || [];
+    // H1 — the SAME gate the /search path uses, which is the point of putting
+    // it in placeSearchGate: without it this safety net answered "find et godt
+    // sted" with an unfiltered catalogue query, i.e. the national top-N.
+    const gate = placeSearchGate(intent);
+    if (!gate.skipped) {
+      const result = await searchPlaces(supabase, {
+        city: intent.city,
+        category: intent.placeCategory,
+      });
+      places = result.results || [];
+    }
   }
 
   if (intent.kind === "events" || intent.kind === "both") {
@@ -1331,27 +1524,49 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
 
               switch (fnName) {
                 case "semantic_search": {
-                  // Use our deployed /search flow internally
+                  // EVENTS: embedding -> match_events, as before.
+                  // PLACES: the catalogue path, NOT match_places. Same root
+                  // cause as /search: `places` has no vector index, so
+                  // match_places is a full scan that cannot finish inside the
+                  // anon statement_timeout -- measured 2026-09-21, "Find
+                  // spisesteder i Aarhus" came back with place_ids [] after
+                  // ~4s of waiting. The catalogue path answers the same
+                  // question in tens of ms, and it is already the shape the
+                  // grounded fallback trusts.
                   try {
-                    const emb: any = await runAiCounted(env.AI, "@cf/baai/bge-m3", { text: [fnArgs.query] });
-                    const vec = emb?.data?.[0];
-                    if (!vec) { result = { error: "embedding failed" }; break; }
-                    const sbHeaders = { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}`, "Content-Type": "application/json" };
                     const kind = fnArgs.kind ?? "both";
-                    // Location awareness (2026-07-22): a named city becomes a
-                    // real bounding box on both RPCs. Unknown city → null →
-                    // unfiltered, never an empty answer.
+                    // Location awareness (2026-07-22): a named city still
+                    // becomes a real bounding box on match_events. Places are
+                    // narrowed by city/nearest_city inside the catalogue query.
                     const bbox = cityToBBox(fnArgs.city);
                     const bboxParams = bbox
                       ? { filter_bbox_n: bbox.n, filter_bbox_s: bbox.s, filter_bbox_e: bbox.e, filter_bbox_w: bbox.w }
                       : {};
                     const out: any = { events: [], places: [] };
                     if (kind === "events" || kind === "both") {
-                      const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_events`, {
-                        method: "POST", headers: sbHeaders,
-                        body: JSON.stringify({ query_embedding: vec, match_count: 8, match_threshold: 0.3, filter_country: fnArgs.country ?? bbox?.country ?? null, ...bboxParams }),
-                      });
-                      out.events = await r.json();
+                      // An embedding failure costs the event half only: it must
+                      // not turn into a tool error the model answers around.
+                      // M3 — it is still a FAILURE, and the model has to be able
+                      // to tell it from "no events match", or it reports a
+                      // search it never made as one that found nothing.
+                      let vec: number[] | undefined;
+                      try {
+                        const emb: any = await runAiCounted(env.AI, "@cf/baai/bge-m3", { text: [fnArgs.query] });
+                        vec = emb?.data?.[0];
+                      } catch (err) {
+                        console.error("Events embedding failed:", err);
+                      }
+                      if (!vec) out.events_error = "embedding_failed";
+                      if (vec) {
+                        const sbHeaders = { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}`, "Content-Type": "application/json" };
+                        out.events = await rpcResultRows(`${env.SUPABASE_URL}/rest/v1/rpc/match_events`, sbHeaders, {
+                          query_embedding: vec,
+                          match_count: 8,
+                          match_threshold: 0.3,
+                          filter_country: fnArgs.country ?? bbox?.country ?? null,
+                          ...bboxParams,
+                        }, () => { out.events_error = "rpc_failed"; });
+                      }
                       (out.events || []).forEach((e: any) => {
                         if (!e?.id) return;
                         collectedEventIds.push(e.id);
@@ -1359,12 +1574,20 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                       });
                     }
                     if (kind === "places" || kind === "both") {
-                      const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_places`, {
-                        method: "POST", headers: sbHeaders,
-                        body: JSON.stringify({ query_embedding: vec, match_count: 8, match_threshold: 0.3, filter_country: fnArgs.country ?? bbox?.country ?? null, ...bboxParams }),
-                      });
-                      out.places = await r.json();
-                      (out.places || []).forEach((p: any) => {
+                      const placeQuery = String(fnArgs.query ?? "").trim();
+                      // No query text and no city is nothing to search on: an
+                      // unfiltered top-8 of the catalogue would be an answer to
+                      // a question nobody asked.
+                      const placeOutcome: SearchOutcome = placeQuery || fnArgs.city
+                        ? await searchPlacesForQuery(env, placeQuery, 8, fnArgs.city)
+                        : { results: [], skipped: "no_query_or_city" };
+                      out.places = placeOutcome.results;
+                      // H1/M3 — the model is told WHY the place half is empty
+                      // ("no_place_intent", "no_city_or_category") or that it
+                      // FAILED, so it cannot narrate a top-8 it never received.
+                      if (placeOutcome.skipped) out.places_skipped = placeOutcome.skipped;
+                      if (placeOutcome.error) out.places_error = placeOutcome.error;
+                      out.places.forEach((p: any) => {
                         if (!p?.id) return;
                         collectedPlaceIds.push(p.id);
                         collectedPlaces.push({ id: p.id, name: p.name, city: p.city });
@@ -1387,7 +1610,17 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                 case "search_routes":
                   result = await searchRoutes(supabase, fnArgs);
                   break;
-                case "search_places":
+                case "search_places": {
+                  // H1 — this tool filters on city, category and tags, and
+                  // nothing else. A call that carries none of them is an
+                  // unfiltered ORDER BY over the whole catalogue, i.e. the
+                  // national top-N: the same non-answer the semantic_search gate
+                  // refuses, so it is not run here either.
+                  const hasPlaceFilter = !!(fnArgs.city || fnArgs.category || fnArgs.tags);
+                  if (!hasPlaceFilter) {
+                    result = { results: [], places_skipped: "no_city_or_category" };
+                    break;
+                  }
                   result = await searchPlaces(supabase, fnArgs);
                   if (result.results) {
                     result.results.forEach((p: any) => {
@@ -1397,6 +1630,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                     });
                   }
                   break;
+                }
 
                 // Weather for an outdoor event/place (open-meteo, free, ~16d horizon).
                 // Returns a clear "too far out"/"unavailable" note rather than inventing.
