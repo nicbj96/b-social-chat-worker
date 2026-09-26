@@ -167,7 +167,19 @@ const worker = {
     if (aiBudgetResponse) return aiBudgetResponse;
 
     if (url.pathname === "/chat" && request.method === "POST") {
-      return handleChat(request, env, ctx);
+      // Compute truncation from a CLONE — a body can only be read once, and
+      // handleChat must still receive an unread stream. Oversized bodies are
+      // skipped here: handleChat rejects those with 400 before any of this
+      // matters. Best-effort throughout: a probe failure must never fail a
+      // legitimate chat request.
+      let truncated = false;
+      try {
+        const raw = await request.clone().text();
+        if (raw.length <= MAX_BODY_BYTES) truncated = isChatInputTruncated(JSON.parse(raw));
+      } catch {
+        truncated = false;
+      }
+      return await tagTruncatedResponse(await handleChat(request, env, ctx), truncated);
     }
 
     // Embed one or many texts — returns 1024-dim bge-m3 vectors
@@ -1197,6 +1209,51 @@ function normalizePublicChatMessages(value: unknown): ChatMessage[] | null {
   return capped.some((message) => message.role === "user") ? capped : null;
 }
 
+// ── Truncation transparency (2026-09-26) ─────────────────────────────────────
+// MAX_MESSAGE_CHARS / MAX_MESSAGES are SILENT clamps: a caller who pastes a
+// long text gets an answer to a shortened question and no way to know. The cap
+// itself is right (cost + prompt-injection blowup guard) — hiding it is not.
+//
+// Chosen shape: keep answering (a 413 on a paste is a worse experience on a
+// public endpoint, and existing clients would surface a hard error), and flag
+// `truncated: true` on the JSON reply so the client can tell the user.
+function isChatInputTruncated(body: unknown): boolean {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+  const b = body as { messages?: unknown; message?: unknown };
+  if (Array.isArray(b.messages)) {
+    if (b.messages.length > MAX_MESSAGES) return true;
+    return b.messages.some((item) => {
+      const content = item && typeof item === "object" ? (item as { content?: unknown }).content : null;
+      return typeof content === "string" && content.length > MAX_MESSAGE_CHARS;
+    });
+  }
+  return typeof b.message === "string" && b.message.length > MAX_MESSAGE_CHARS;
+}
+
+/** Add `truncated: true` to a JSON chat response.
+ *
+ *  Passes anything that is not a JSON object body straight through: a reply is
+ *  never corrupted (or re-serialized) just to attach a flag to it. Headers are
+ *  carried over verbatim so CORS survives the re-wrap. */
+async function tagTruncatedResponse(res: Response, truncated: boolean): Promise<Response> {
+  if (!truncated) return res;
+  if (!(res.headers.get("content-type") || "").includes("application/json")) return res;
+  try {
+    const body: unknown = await res.clone().json();
+    if (!body || typeof body !== "object" || Array.isArray(body)) return res;
+    const headers = new Headers(res.headers);
+    headers.set("content-type", "application/json; charset=utf-8");
+    return new Response(JSON.stringify({ ...(body as Record<string, unknown>), truncated: true }), {
+      status: res.status,
+      headers,
+    });
+  } catch {
+    // A reply we cannot re-read is still a reply. Never fail the request over
+    // an informational flag.
+    return res;
+  }
+}
+
 async function directDiscoveryFallback(
   env: Env,
   userMessages: ChatMessage[],
@@ -1977,3 +2034,14 @@ function jsonResponse(data: any, status = 200): Response {
     },
   });
 }
+
+// ── Test-only exports ────────────────────────────────────────────────────────
+// Pure helpers the vitest suite exercises without touching Cloudflare globals.
+// Prefixed __test so the Worker export surface stays the default handler.
+export const __test = {
+  isChatInputTruncated,
+  tagTruncatedResponse,
+  normalizePublicChatMessages,
+  MAX_MESSAGE_CHARS,
+  MAX_MESSAGES,
+};
