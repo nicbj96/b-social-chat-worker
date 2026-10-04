@@ -88,9 +88,17 @@ describe("searchPlaces city matching", () => {
 // both needles present for an aliased city, the single ilike kept for every
 // other city, and nothing that would break the expression reaching the query.
 function fakeEventsSupabase() {
-  const calls: { or?: string; ilike?: [string, string] } = {};
+  // Keep these assertions focused on city aliases; eligibility adds separate
+  // ANDed or() clauses, exercised through the real SDK in event-eligibility.
+  const ors: string[] = [];
+  const calls: { or?: string; ilike?: [string, string] } = {
+    get or() { return ors.find((expression) => expression.startsWith("location.")); },
+    set or(expression) { if (expression) ors.push(expression); },
+  };
   const q: any = {
     select: () => q,
+    not: () => q,
+    lt: () => q,
     gte: () => q,
     order: () => q,
     limit: () => q,

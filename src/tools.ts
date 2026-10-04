@@ -67,6 +67,18 @@ export const TOOLS = [
             type: "string",
             description: "Bynavn at filtrere eventets location på, f.eks. 'Aarhus'",
           },
+          date_from: {
+            type: "string",
+            description: "Inklusiv nedre grænse som ISO-tid med Z eller eksplicit offset. Medtager igangværende events med kendt sluttid; ukendt sluttid medtages kun hvis starten ikke er passeret. Gæt ikke offset for en ukendt lokal tidszone.",
+          },
+          date_to: {
+            type: "string",
+            description: "Eksklusiv øvre grænse for start som ISO-tid med Z eller eksplicit offset. Datofiltre anvendes før resultatloftet på 8.",
+          },
+          timezone: {
+            type: "string",
+            description: "Kun eksplicit ønsket IANA-visningstidszone, fx Europe/Copenhagen. Default er mærket UTC, ikke eventets lokale tidszone. Eventets tidszone og valuta er ukendte; udled dem aldrig fra land.",
+          },
         },
       },
     },
@@ -199,7 +211,7 @@ export const TOOLS = [
     function: {
       name: "rsvp_event",
       description:
-        "Du SKAL kalde dette tool når brugeren siger 'jeg vil med', 'tilmeld mig', 'reservér plads', 'sæt mig på listen', 'jeg er på'. Default status='going'. SIG ALDRIG 'du er tilmeldt' uden at have kaldt dette tool først.",
+        "Gem kun en deltagelsesmarkering i B Social, ikke billetkøb eller reservation hos arrangøren. Brug når brugeren vil markere 'jeg vil med' eller interesse. Ved ønske om billet/reservation: forklar begrænsningen, kald ikke tool'et som erstatning. Default status='going'. Bekræft kun deltagelsesmarkeringen efter succes; sig aldrig at en billet eller plads er sikret.",
       parameters: {
         type: "object",
         properties: {
@@ -311,6 +323,9 @@ export type ToolCallArgs = {
     mode?: string;
     indoor_outdoor?: string;
     city?: string;
+    date_from?: string;
+    date_to?: string;
+    timezone?: string;
   };
   search_routes: {
     activity_type?: string;

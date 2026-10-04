@@ -1870,11 +1870,15 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
               });
               if (!r.ok) {
                 const errText = await r.text();
-                result = { error: "Kunne ikke tilmelde til event", details: errText };
+                result = { error: "Kunne ikke gemme deltagelsesmarkering", details: errText };
               } else {
-                result = { ok: true, event_id: fnArgs.event_id, status };
+                const statusLabel = status === "interested" ? "interesseret" : status === "not_going" ? "deltager ikke" : "deltager";
+                result = {
+                  ok: true, event_id: fnArgs.event_id, status, action: "participation_marker",
+                  message: `Din deltagelsesmarkering i B Social er gemt: ${statusLabel}. Det er ikke billetkøb eller reservation hos arrangøren.`,
+                };
               }
-            } catch (e: any) { result = { error: "Kunne ikke tilmelde til event", details: e.message }; }
+            } catch (e: any) { result = { error: "Kunne ikke gemme deltagelsesmarkering", details: e.message }; }
             break;
           }
 

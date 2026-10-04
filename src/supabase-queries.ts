@@ -36,12 +36,45 @@ export async function searchEvents(
   supabase: SupabaseClient,
   args: ToolCallArgs["search_events"]
 ) {
+  // Bounds are instants, not offset-less local dates. Unknown event timezone
+  // cannot safely supply an offset for the caller's calendar day.
+  const parseBound = (value: unknown): string | null => {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return null;
+    const timestamp = Date.parse(value);
+    if (!Number.isFinite(timestamp)) return null;
+    // Date.parse rolls February 29/30 and 24:00 into another day. Validate the
+    // literal calendar/clock first instead of silently repairing the request.
+    const local = new Date(`${value.slice(0, 19)}Z`);
+    if (Number.isNaN(local.getTime()) || local.toISOString().slice(0, 19) !== value.slice(0, 19)) return null;
+    return new Date(timestamp).toISOString();
+  };
+  const from = args.date_from === undefined ? undefined : parseBound(args.date_from);
+  const to = args.date_to === undefined ? undefined : parseBound(args.date_to);
+  let displayTimezone = "UTC";
+  try {
+    if (args.timezone !== undefined) {
+      if (typeof args.timezone !== "string" || !args.timezone.trim()) throw new Error("invalid timezone");
+      displayTimezone = new Intl.DateTimeFormat("da-DK", { timeZone: args.timezone }).resolvedOptions().timeZone;
+    }
+  } catch {
+    return { results: [], error: "Ugyldig visningstidszone" };
+  }
+  if (from === null || to === null || (from && to && from >= to)) {
+    return { results: [], error: "Ugyldigt datointerval: brug ISO-tid med Z eller eksplicit UTC-offset" };
+  }
+  const cutoff = new Date(Math.max(Date.now(), from ? Date.parse(from) : 0)).toISOString();
+  if (to && to <= cutoff) return { results: [] };
+
   let query = supabase
     .from("events")
-    .select("id, title, description, location, date, category, price, interest_tags, suitable_for_modes, indoor_outdoor")
-    .gte("date", new Date().toISOString()) // only future events
-    .order("date", { ascending: true })
-    .limit(8);
+    .select("id, title, description, location, date, end_date, all_day, status, country, source, url, category, price, interest_tags, suitable_for_modes, indoor_outdoor")
+    .not("date", "is", null)
+    .or("status.eq.active,status.is.null")
+    // Known end: include ongoing until (not including) end. Unknown end:
+    // include only starts at/after cutoff, even for all-day/unknown-time rows.
+    // Each or() is ANDed by PostgREST with the other filters before LIMIT.
+    .or(`end_date.gt.${cutoff},and(end_date.is.null,date.gte.${cutoff})`);
+  if (to) query = query.lt("date", to);
 
   // The model routinely emits a category word from outside the real taxonomy
   // ("musik", "concert", the worker's own legacy "mad_hangout"). Normalising
@@ -74,7 +107,10 @@ export async function searchEvents(
     query = query.overlaps("interest_tags", tagList);
   }
 
-  const { data, error } = await query;
+  const { data, error } = await query
+    .order("date", { ascending: true })
+    .order("id", { ascending: true })
+    .limit(8);
 
   if (error) {
     console.error("Events query error:", error);
@@ -87,9 +123,22 @@ export async function searchEvents(
       title: e.title,
       description: e.description,
       location: e.location,
-      date: formatDate(e.date),
+      date: formatDate(e.date, e.all_day, displayTimezone),
+      date_raw: e.date,
+      end_date: e.end_date ?? null,
+      all_day: e.all_day ?? null,
+      status: e.status ?? null,
+      country: e.country ?? null,
+      source: e.source ?? null,
+      url: e.url ?? null,
+      // These columns do not exist in the events schema. Unknown is not DKK
+      // or Copenhagen, even when a row has a country.
+      timezone: null,
+      currency: null,
+      price_amount: e.price ?? null,
       category: e.category,
-      price: e.price ? `${e.price} kr` : "Gratis",
+      price: typeof e.price !== "number" || !Number.isFinite(e.price) || e.price < 0
+        ? "Pris ukendt" : e.price === 0 ? "Gratis" : `${e.price} (valuta ukendt)`,
       tags: e.interest_tags?.join(", "),
       modes: e.suitable_for_modes?.join(", "),
       indoor_outdoor: e.indoor_outdoor,
@@ -262,16 +311,9 @@ export async function searchPlaces(
   };
 }
 
-// Helper: format ISO date to nice Danish format.
-//
-// timeZone is NOT optional here. A Worker isolate runs in UTC, so without it
-// every time came out an hour or two early — "kl. 17.00" for an event the site
-// itself lists at 19.00 (2026-08-02 live verification). A customer acting on
-// the assistant's answer would show up two hours before the doors open, which
-// is worse than not answering at all.
-const EVENT_TZ = "Europe/Copenhagen";
-
-function formatDate(isoDate: string): string {
+// UTC is an explicitly labelled display basis, not the event's local timezone.
+// The current schema has no timezone provenance; never silently assign one.
+function formatDate(isoDate: string, allDay = false, displayTimezone = "UTC"): string {
   try {
     const date = new Date(isoDate);
     if (Number.isNaN(date.getTime())) return isoDate;
@@ -279,16 +321,18 @@ function formatDate(isoDate: string): string {
     // Midnight UTC is the importer's "we got a date, not a time" sentinel
     // (mirrors the frontend's eventTimeUnknown rule). Rendering it as a clock
     // would invent a start time, so the date stands alone.
-    const timeUnknown = date.getUTCHours() === 0 && date.getUTCMinutes() === 0;
+    const timeUnknown = allDay || (date.getUTCHours() === 0 && date.getUTCMinutes() === 0);
 
-    return date.toLocaleDateString("da-DK", {
+    const label = date.toLocaleDateString("da-DK", {
       weekday: "long",
       day: "numeric",
       month: "long",
       year: "numeric",
-      timeZone: EVENT_TZ,
+      // Do not shift a date-only sentinel into a different calendar day.
+      timeZone: timeUnknown ? "UTC" : displayTimezone,
       ...(timeUnknown ? {} : { hour: "2-digit", minute: "2-digit" }),
     });
+    return `${label} (${timeUnknown ? "UTC-dato" : displayTimezone}; lokal tidszone ukendt)`;
   } catch {
     return isoDate;
   }
