@@ -3,6 +3,7 @@
   "canonical": "b-social-pages/source/src/lib/searchIntent.ts",
   "sha256": {
     "schema": "058f222c395bb9e5f2d6692c237f6123e471c4e26577197f3deb1daf84670a12",
-    "fixtures": "1541107b7af74b5ecf2059e65ce5bb5e5674f53112e982cbd695ca1e58beb0d9"
+    "fixtures": "1541107b7af74b5ecf2059e65ce5bb5e5674f53112e982cbd695ca1e58beb0d9",
+    "retrieval": "e3c0c28c7f3d8ecbb61c911e9d97656b11894bccec319c66b044a56465964c4a"
   }
 }

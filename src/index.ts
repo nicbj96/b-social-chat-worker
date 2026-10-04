@@ -8,6 +8,8 @@ import { promptVersion } from "./promptVersion";
 // to remember to bump is wrong the first time anyone edits in a hurry.
 const PROMPT_VERSION = promptVersion(SYSTEM_PROMPT);
 import { TOOLS } from "./tools";
+import {fetchDiscoveryPage,DiscoveryError} from './discovery-retrieval';
+import {createClient} from '@supabase/supabase-js';
 import {
   createSupabaseClient,
   searchEvents,
@@ -1385,14 +1387,39 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       return jsonResponse({ error: "Ugyldig JSON" }, 400);
     }
 
-    // Fail closed BEFORE model, retrieval, telemetry or fallback can drop hard filters.
-    // v2 retrieval is not installed yet. Legacy callers without this field stay compatible.
+    // Explicit intent bypasses legacy model/telemetry paths. Missing RPC fails
+    // closed; unsupported region metadata never silently widens geography.
     if (Object.prototype.hasOwnProperty.call(body, "discovery_intent")) {
-      try { parseSearchIntent((body as {discovery_intent?: unknown}).discovery_intent); }
-      catch { return jsonResponse({error:"invalid_discovery_intent", contract_version:1},400); }
-      return jsonResponse({error:"unsupported_discovery_intent", contract_version:1,
-        retrieval_status:"unsupported", applied_filters:null,
-        reply:"Disse søgefiltre understøttes endnu ikke af chat. Brug søgesiden."},422);
+      let intent;
+      try {intent=parseSearchIntent((body as {discovery_intent?:unknown}).discovery_intent);}
+      catch {return jsonResponse({error:'invalid_discovery_intent',contract_version:1},400);}
+      try {
+        // Verified user token or public anon; never service-role discovery.
+        const client=createClient(env.SUPABASE_URL,env.SUPABASE_KEY,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false},
+          global:{headers:userId && userJwt?{Authorization:`Bearer ${userJwt}`}:{}}});
+        const cursor=(body as {discovery_cursor?:unknown}).discovery_cursor;
+        const page=await fetchDiscoveryPage(client,{version:1,intent,pageSize:8,...(cursor!==undefined?{cursor:cursor as any}:{})},request.signal);
+        const sources=page.items.map(item=>({id:item.data.id,kind:item.kind,
+          url:`/${item.kind==='event'?'event':'sted'}/${item.data.id}`,verified_fields:item.data,
+          retrieved_at:page.retrievedAt,source_updated_at:null}));
+        const labels=page.items.map(item=>{
+          const d=item.data;
+          if(item.kind==='place') return String(d.name);
+          const price=typeof d.price==='number' && Number.isFinite(d.price) && d.price>=0
+            ? d.price===0?'Gratis':`${d.price} ${typeof d.price_currency==='string'?d.price_currency:'(valuta ukendt)'}`:'Pris ukendt';
+          return `${d.title} — ${price}`;
+        });
+        return jsonResponse({reply:labels.length?labels.join('\n'):'Ingen resultater med de valgte filtre.',
+          event_ids:page.items.filter(i=>i.kind==='event').map(i=>i.data.id),place_ids:page.items.filter(i=>i.kind==='place').map(i=>i.data.id),
+          sources,applied_filters:intent,retrieval_status:page.status,consistency:page.consistency,
+          hasMore:page.hasMore,nextCursor:page.nextCursor,contract_version:1});
+      } catch(error) {
+        const code=error instanceof DiscoveryError?error.code:'discovery_unavailable';
+        const unsupported=code==='unsupported_region_metadata';
+        return jsonResponse({error:code,retrieval_status:unsupported?'unsupported':'failed',applied_filters:null,
+          reply:unsupported?'Regionen mangler verificeret metadata. Filtrene er bevaret.':'Søgningen kunne ikke gennemføres. Prøv igen.',contract_version:1},
+          unsupported?422:code.startsWith('invalid_')?400:503);
+      }
     }
 
     // Support both { messages: [...] } and { message: "..." } while treating
