@@ -98,10 +98,13 @@ export function parseSearchIntent(value: unknown): SearchIntent {
   return {version:1,query:text(v.query,500),queryShareable:bool(v.queryShareable),kind:choice(v.kind,['event','place','both']),...(tags?{tags}:{}),geography,date,price,sort};
 }
 
+/** Exact query representation shared by request identity and RPC transport.
+ * ECMAScript trim (including tab/newline/NBSP), then Danish locale lowercase. */
+export function normalizedDiscoveryQuery(query:string):string {return query.trim().toLocaleLowerCase('da-DK');}
 /** Stable semantic identity. No cursor, viewport or implicit cached GPS. */
 export function searchIntentKey(intent: SearchIntent): string {
   const i=parseSearchIntent(intent);
-  return JSON.stringify({...i,query:i.query.trim().toLocaleLowerCase('da-DK')});
+  return JSON.stringify({...i,query:normalizedDiscoveryQuery(i.query)});
 }
 export interface SearchRequest {
   version: 1; intent: SearchIntent; pageSize: number;

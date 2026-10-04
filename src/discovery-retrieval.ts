@@ -1,12 +1,13 @@
 import type {SupabaseClient} from '@supabase/supabase-js';
-import {parseSearchRequest,searchIntentKey,type SearchRequest} from './searchIntent';
+import {parseSearchRequest,searchIntentKey,normalizedDiscoveryQuery,type SearchRequest} from './searchIntent';
 export interface DiscoveryItem {kind:'event'|'place';data:Record<string,unknown> & {id:string;title?:string;name?:string}}
 export interface DiscoveryPage {items:DiscoveryItem[];status:'complete';consistency:'live-keyset';hasMore:boolean;nextCursor:SearchRequest['cursor']|null;retrievedAt:string}
 export class DiscoveryError extends Error {
  constructor(public code:'unsupported_region_metadata'|'invalid_discovery_cursor'|'invalid_search_intent'|'discovery_unavailable'){super(code);}
 }
 /** Canonical adapter. Worker mirror changes only the contract import path.
- * Cursor is opaque and auth/intent-bound by SQL. Live keysets are NOT a frozen
+ * Continuation is editable hex JSON with advisory mismatch guards, not auth.
+ * Each request rechecks SQL invoker RLS. Live keysets are NOT a frozen
  * MVCC snapshot: writes/eligibility changes between pages may move membership.
  */
 export async function fetchDiscoveryPage(client:SupabaseClient,input:SearchRequest,signal?:AbortSignal):Promise<DiscoveryPage> {
@@ -18,7 +19,7 @@ export async function fetchDiscoveryPage(client:SupabaseClient,input:SearchReque
  cancellation.throwIfAborted();
  const {data,error}=await client.rpc(request.viewport?'discovery_map_v1':'discovery_search_v1',{
   ...(request.viewport?{p_viewport:request.viewport}:{}),
-  p_intent:request.intent,p_cursor:request.cursor?.token??null,p_limit:request.pageSize,
+  p_intent:{...request.intent,query:normalizedDiscoveryQuery(request.intent.query)},p_cursor:request.cursor?.token??null,p_limit:request.pageSize,
  }).abortSignal(cancellation);
  cancellation.throwIfAborted();
  if(error) {

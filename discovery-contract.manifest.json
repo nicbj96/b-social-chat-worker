@@ -2,8 +2,8 @@
   "contract_version": 1,
   "canonical": "b-social-pages/source/src/lib/searchIntent.ts",
   "sha256": {
-    "schema": "ba5382752cfaf35adc4941219638730cb6c35e8df93252fe592aebd2f1a814ba",
+    "schema": "b759111092170f6979d83c4415398642edf12f55b3ddc1ea861b17118b020ff7",
     "fixtures": "1541107b7af74b5ecf2059e65ce5bb5e5674f53112e982cbd695ca1e58beb0d9",
-    "retrieval": "d265c07a16c5265c1bcaf039f2251ed0cd316a6db2460ebdc96f0f9b000cdb30"
+    "retrieval": "a9b304060d6ba9b044c66ae101b356e760edb93abd5bb4b5741064765a1e81ae"
   }
 }
