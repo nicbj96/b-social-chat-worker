@@ -1,3 +1,4 @@
+import { parseSearchIntent } from "./discovery-contract";
 import * as Sentry from "@sentry/cloudflare";
 import { cityToBBox } from "./city-bbox";
 import { SYSTEM_PROMPT } from "./system-prompt";
@@ -1186,6 +1187,7 @@ async function handleAdminAsk(request: Request, env: Env): Promise<Response> {
   }
 }
 
+
 // S4 — conservative input caps (cost + prompt-injection blowup guard).
 const MAX_MESSAGES = 30;        // keep only the last N turns
 const MAX_MESSAGE_CHARS = 4000; // per-message content cap
@@ -1381,6 +1383,16 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       body = parsed as typeof body;
     } catch {
       return jsonResponse({ error: "Ugyldig JSON" }, 400);
+    }
+
+    // Fail closed BEFORE model, retrieval, telemetry or fallback can drop hard filters.
+    // v2 retrieval is not installed yet. Legacy callers without this field stay compatible.
+    if (Object.prototype.hasOwnProperty.call(body, "discovery_intent")) {
+      try { parseSearchIntent((body as {discovery_intent?: unknown}).discovery_intent); }
+      catch { return jsonResponse({error:"invalid_discovery_intent", contract_version:1},400); }
+      return jsonResponse({error:"unsupported_discovery_intent", contract_version:1,
+        retrieval_status:"unsupported", applied_filters:null,
+        reply:"Disse søgefiltre understøttes endnu ikke af chat. Brug søgesiden."},422);
     }
 
     // Support both { messages: [...] } and { message: "..." } while treating

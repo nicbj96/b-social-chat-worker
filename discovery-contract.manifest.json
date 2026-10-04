@@ -1,0 +1,8 @@
+{
+  "contract_version": 1,
+  "canonical": "b-social-pages/source/src/lib/searchIntent.ts",
+  "sha256": {
+    "schema": "058f222c395bb9e5f2d6692c237f6123e471c4e26577197f3deb1daf84670a12",
+    "fixtures": "1541107b7af74b5ecf2059e65ce5bb5e5674f53112e982cbd695ca1e58beb0d9"
+  }
+}
