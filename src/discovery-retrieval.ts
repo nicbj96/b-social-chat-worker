@@ -16,7 +16,8 @@ export async function fetchDiscoveryPage(client:SupabaseClient,input:SearchReque
  const deadline=AbortSignal.timeout(6000);
  const cancellation=signal?AbortSignal.any([signal,deadline]):deadline;
  cancellation.throwIfAborted();
- const {data,error}=await client.rpc('discovery_search_v1',{
+ const {data,error}=await client.rpc(request.viewport?'discovery_map_v1':'discovery_search_v1',{
+  ...(request.viewport?{p_viewport:request.viewport}:{}),
   p_intent:request.intent,p_cursor:request.cursor?.token??null,p_limit:request.pageSize,
  }).abortSignal(cancellation);
  cancellation.throwIfAborted();

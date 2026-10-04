@@ -106,9 +106,11 @@ export function searchIntentKey(intent: SearchIntent): string {
 export interface SearchRequest {
   version: 1; intent: SearchIntent; pageSize: number;
   cursor?: {intentKey:string; token:string};
+  /** Transport ViewState, never part of SearchIntent. west > east crosses the dateline. */
+  viewport?: {north:number;south:number;east:number;west:number};
 }
 export function parseSearchRequest(value: unknown): SearchRequest {
-  const v=object(value,['version','intent','pageSize','cursor']);
+  const v=object(value,['version','intent','pageSize','cursor','viewport']);
   if (v.version!==1) return fail();
   const intent=parseSearchIntent(v.intent); const pageSize=number(v.pageSize,1,50);
   if (!Number.isInteger(pageSize)) return fail();
@@ -118,7 +120,13 @@ export function parseSearchRequest(value: unknown): SearchRequest {
     cursor={intentKey:text(c.intentKey,40000),token:text(c.token,2048,/^[A-Za-z0-9_.~-]+$/)};
     if (cursor.intentKey!==searchIntentKey(intent)) return fail();
   }
-  return {version:1,intent,pageSize,...(cursor?{cursor}:{})};
+  let viewport:SearchRequest['viewport'];
+  if(v.viewport!==undefined){
+    const b=object(v.viewport,['north','south','east','west']);
+    viewport={north:number(b.north,-90,90),south:number(b.south,-90,90),east:number(b.east,-180,180),west:number(b.west,-180,180)};
+    if(viewport.north<=viewport.south) return fail();
+  }
+  return {version:1,intent,pageSize,...(cursor?{cursor}:{}),...(viewport?{viewport}:{})};
 }
 /** Single URL codec. Personal coordinates and private text never enter the URL.
  * The caller may preserve the full intent in tab-local history.state instead.
