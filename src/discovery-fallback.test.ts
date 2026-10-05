@@ -657,7 +657,7 @@ describe("places in the fallback carry ids, sources and coordinates", () => {
     expect(out.place_ids).toEqual(["p1", "p2"]);
     expect(out.sources).toHaveLength(2);
     expect(out.sources[0]).toMatchObject({
-      id: "p1", kind: "place", url: "/place/p1",
+      id: "p1", kind: "place", url: "/sted/p1",
       verified_fields: { id: "p1", title: "Moesgaard", latitude: 56.08, longitude: 10.23 },
       source_updated_at: null,
     });

@@ -552,7 +552,7 @@ export function formatFallbackReply(
       ...selectedPlaces.slice(0, intent.limit).map((place) => ({
         id: String(place.id),
         kind: "place" as const,
-        url: `/place/${place.id}`,
+        url: `/sted/${place.id}`,
         verified_fields: {
           id: String(place.id),
           title: place.name?.slice(0, 200),
