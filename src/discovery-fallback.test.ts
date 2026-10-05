@@ -642,3 +642,27 @@ describe("audit #4: degraded reply carries ids and coordinates for the map hando
     expect(out.degraded).toBeUndefined();
   });
 });
+
+describe("places in the fallback carry ids, sources and coordinates", () => {
+  it("includes places in place_ids and sources[] in the same shape as events", () => {
+    const out: any = formatFallbackReply(
+      { kind: "places", city: "Aarhus", limit: 4 },
+      [
+        { id: "p1", name: "Moesgaard", city: "Aarhus", latitude: 56.08, longitude: 10.23 } as any,
+        { id: "p2", name: "Uden koordinater", city: "Aarhus", latitude: null, longitude: null } as any,
+      ],
+      [],
+      "da",
+    );
+    expect(out.place_ids).toEqual(["p1", "p2"]);
+    expect(out.sources).toHaveLength(2);
+    expect(out.sources[0]).toMatchObject({
+      id: "p1", kind: "place", url: "/place/p1",
+      verified_fields: { id: "p1", title: "Moesgaard", latitude: 56.08, longitude: 10.23 },
+      source_updated_at: null,
+    });
+    expect(typeof out.sources[0].retrieved_at).toBe("string");
+    expect(out.sources[1].verified_fields.latitude).toBeNull();
+    expect(out.sources[1].verified_fields.longitude).toBeNull();
+  });
+});

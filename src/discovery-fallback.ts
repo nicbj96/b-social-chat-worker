@@ -548,7 +548,23 @@ export function formatFallbackReply(
     event_ids: selectedEvents.map((event) => String(event.id)),
     // Same shape as the normal discovery reply (index.ts /discovery sources[]),
     // so the client's map handoff can read coordinates from verified_fields.
-    sources: selectedEvents.map((event) => ({
+    sources: [
+      ...selectedPlaces.slice(0, intent.limit).map((place) => ({
+        id: String(place.id),
+        kind: "place" as const,
+        url: `/place/${place.id}`,
+        verified_fields: {
+          id: String(place.id),
+          title: place.name?.slice(0, 200),
+          location: (place.city ?? place.nearest_city)?.slice(0, 200) ?? null,
+          date: null,
+          latitude: Number.isFinite(place.latitude) ? place.latitude : null,
+          longitude: Number.isFinite(place.longitude) ? place.longitude : null,
+        },
+        retrieved_at: new Date().toISOString(),
+        source_updated_at: null,
+      })),
+      ...selectedEvents.map((event) => ({
       id: String(event.id),
       kind: "event" as const,
       url: `/event/${event.id}`,
@@ -565,6 +581,7 @@ export function formatFallbackReply(
       retrieved_at: new Date().toISOString(),
       source_updated_at: null,
     })),
+    ],
     suggested_tag_slugs: intent.placeCategory ? [intent.placeCategory] : [],
     // No `degraded` here: a catalogue answer is a good answer. Callers that
     // reach it through a real failure (provider error, breaker, deadline, cap)

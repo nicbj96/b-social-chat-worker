@@ -83,6 +83,8 @@ describe("searchPlaces ranking query — narrow then fetch", () => {
     expect(queries[1].select).toContain("metadata");
     expect(queries[1].select).toContain("description");
     expect(queries[1].select).toContain("nearest_city");
+    expect(queries[1].select).toContain("latitude");
+    expect(queries[1].select).toContain("longitude");
     expect(queries[1].in).toEqual(["id", ["p-a", "p-b"]]);
     expect(result.results.map((r: any) => r.id)).toEqual(["p-a", "p-b"]);
   });

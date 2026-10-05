@@ -283,7 +283,7 @@ export async function searchPlaces(
 
   const { data, error } = await supabase
     .from("places")
-    .select("id, name, description, city, nearest_city, region, main_categories, tags, smart_tags, rating_avg, metadata")
+    .select("id, name, description, city, nearest_city, region, main_categories, tags, smart_tags, rating_avg, latitude, longitude, metadata")
     .in("id", ids);
 
   if (error) {
@@ -309,6 +309,9 @@ export async function searchPlaces(
       // then dropping it here is why the first attempt changed nothing.
       nearest_city: p.nearest_city,
       region: p.region,
+      // Null stays null: a missing coordinate must never become (0,0).
+      latitude: Number.isFinite(p.latitude) ? p.latitude : null,
+      longitude: Number.isFinite(p.longitude) ? p.longitude : null,
       categories: p.main_categories?.join(", "),
       tags: p.tags?.join(", "),
       rating: p.rating_avg ? `${p.rating_avg}/5` : "Ingen rating endnu",
