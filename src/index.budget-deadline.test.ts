@@ -157,6 +157,40 @@ describe("budget/deadline — session budget ledger", () => {
   });
 });
 
+describe("budget/deadline — quota is charged only for turns that reach the model (R1-2)", () => {
+  const sessionCharges = (consume: any) => consume.mock.calls.filter((c: unknown[]) => c[0] === 5);
+  it("(a) turn ending in catalogueFallback at the neuron ceiling is NOT charged", async () => {
+    const { consume, namespace } = fakeNamespace();
+    const ns: any = { getByName: (n: string) => { const o = namespace.getByName(n); return n === "ai-neurons:v1:global" ? { ...o, peek: async () => ({ success: false, retryAfterSeconds: 900 }) } : o; } };
+    const aiRun = vi.fn().mockResolvedValue({ response: "SKAL IKKE KALDES" });
+    const r = await worker.fetch!(chatRequest("jazz i Aarhus?"), baseEnv(aiRun, { RATE_LIMITER: ns }), executionContext());
+    expect(r.status).toBe(200);
+    expect(aiRun).not.toHaveBeenCalled();
+    expect(sessionCharges(consume)).toHaveLength(0);
+  });
+  it("(b) a normal AI turn is charged exactly once", async () => {
+    const { consume, namespace } = fakeNamespace();
+    const aiRun = vi.fn().mockResolvedValue({ response: "Hej!" });
+    const r = await worker.fetch!(chatRequest("godmorgen"), baseEnv(aiRun, { RATE_LIMITER: namespace }), executionContext());
+    expect(r.status).toBe(200);
+    expect(aiRun).toHaveBeenCalled();
+    expect(sessionCharges(consume)).toHaveLength(1);
+  });
+  it("(c) 6th AI turn for a free account is still 429 with upgrade, model not called on it", async () => {
+    const fetchSpy = authFetchMock();
+    const { namespace } = fakeNamespace();
+    const aiRun = vi.fn().mockResolvedValue({ response: "Hej!" });
+    const env = baseEnv(aiRun, { RATE_LIMITER: namespace });
+    let last: Response | undefined;
+    for (let i = 0; i < 6; i++) last = await worker.fetch!(authedChat("user-free"), env, executionContext());
+    fetchSpy.mockRestore();
+    expect(last!.status).toBe(429);
+    const b = await last!.json() as any;
+    expect(b.upgrade).toEqual({ href: "/plus" });
+    expect(aiRun).toHaveBeenCalledTimes(5);
+  });
+});
+
 describe("budget/deadline — resource caps", () => {
   it("an over-cap embedding vector is a named cap error — the RPC never fires and no rows are invented", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");

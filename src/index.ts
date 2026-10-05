@@ -37,6 +37,7 @@ import {
   capRows,
   classifyProviderFailure,
   CHAT_TIERS,
+  SESSION_BUDGET_WINDOW_MS,
   consumeSessionTurnBudget,
   degradationNotice,
   sessionBudgetKey,
@@ -1534,21 +1535,28 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
     // applies) and never takes chat down.
     const sessionBudgetKey_ = sessionBudgetKey(userId, await rateLimitActorKey(request, "/chat"));
     const tier = await resolveChatTier(env, userId, userJwt);
-    const sessionBudget = await consumeSessionTurnBudget(
-      env.RATE_LIMITER ? env.RATE_LIMITER.getByName(sessionBudgetKey_) : undefined,
-      sessionBudgetKey_, 1, CHAT_TIERS[tier],
-    );
-    if (!sessionBudget.allowed) {
-      console.error(JSON.stringify({ event: "session_budget_exhausted", tier, persisted: sessionBudget.persisted }));
-      const notice = degradationNotice(tier === "plus" ? "plus_fair_use_exhausted" : "session_budget_exhausted", sessionBudget.retryAfterSeconds);
+    const sessionStore = env.RATE_LIMITER ? env.RATE_LIMITER.getByName(sessionBudgetKey_) : undefined;
+    const sessionCap = CHAT_TIERS[tier];
+    const quotaExhausted429 = (d: { retryAfterSeconds: number; persisted: boolean; cap: number }) => {
+      console.error(JSON.stringify({ event: "session_budget_exhausted", tier, persisted: d.persisted }));
+      const notice = degradationNotice(tier === "plus" ? "plus_fair_use_exhausted" : "session_budget_exhausted", d.retryAfterSeconds);
       return jsonResponse(
-        { error: "session_budget_exhausted", retry_after_seconds: sessionBudget.retryAfterSeconds, degraded: true, degradation: notice, notice: notice.notice,
-          quota: { tier, cap: sessionBudget.cap, remaining: 0 }, upgrade: tier === "free" ? { href: "/plus" } : undefined },
+        { error: "session_budget_exhausted", retry_after_seconds: d.retryAfterSeconds, degraded: true, degradation: notice, notice: notice.notice,
+          quota: { tier, cap: d.cap, remaining: 0 }, upgrade: tier === "free" ? { href: "/plus" } : undefined },
         429,
-        { "Retry-After": String(sessionBudget.retryAfterSeconds) },
+        { "Retry-After": String(d.retryAfterSeconds) },
       );
+    };
+    // Read-only pre-check (charges nothing): an already-exhausted account gets
+    // its 429 without any AI work. The actual debit happens just before the
+    // first model call, so turns that never reach the model cost no quota.
+    if (sessionStore && typeof (sessionStore as any).peek === "function") {
+      try {
+        const pk = await (sessionStore as any).peek(sessionCap, SESSION_BUDGET_WINDOW_MS);
+        if (!pk.success) return quotaExhausted429({ retryAfterSeconds: pk.retryAfterSeconds, persisted: true, cap: sessionCap });
+      } catch { /* fail-open: consume below decides */ }
     }
-    chatQuotaByRequest.set(request, { tier, cap: sessionBudget.cap, remaining: sessionBudget.remaining });
+    chatQuotaByRequest.set(request, { tier, cap: sessionCap, remaining: null });
 
     executionCtx.waitUntil(notifyCommandCenter(env, latestUserMessage(userMessages), body.context || {}));
 
@@ -1690,6 +1698,13 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
       console.error(JSON.stringify({ event: "ai_daily_ceiling_reached", action: "direct_fallback" }));
       return await catalogueFallbackForTurn(env, userMessages, ctx, { reason: "provider_429", retryAfterSeconds: ceiling.retryAfterSeconds ?? 60 });
     }
+
+    // Debit the session quota now: this is the first point where a model call
+    // is certain (greeting/catalogue fallbacks, open breaker and the neuron
+    // ceiling all returned above without cost).
+    const sessionBudget = await consumeSessionTurnBudget(sessionStore, sessionBudgetKey_, 1, sessionCap);
+    if (!sessionBudget.allowed) return quotaExhausted429(sessionBudget);
+    chatQuotaByRequest.set(request, { tier, cap: sessionBudget.cap, remaining: sessionBudget.remaining });
 
     // First AI call — may include tool calls
     let aiResponse: any;
