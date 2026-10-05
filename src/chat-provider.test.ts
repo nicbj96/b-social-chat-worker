@@ -79,9 +79,9 @@ describe("session budget ledger (account-scoped)", () => {
   });
 
   it("keys account-scoped, never user-name-plain for anon", () => {
-    expect(sessionBudgetKey("user-7", "v1:abcdef")).toBe("session-chat-budget:v1:account:user-7");
+    expect(sessionBudgetKey("user-7", "v1:abcdef")).toBe("session-chat-budget:v2:account:user-7");
     const anon = sessionBudgetKey(null, "v1:abcdef");
-    expect(anon).toBe("session-chat-budget:v1:anon:abcdef");
+    expect(anon).toBe("session-chat-budget:v2:anon:abcdef");
     expect(anon).not.toContain("user");
   });
 });

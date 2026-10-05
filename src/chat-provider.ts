@@ -86,8 +86,11 @@ export class TurnDeadline {
 
 // ── Session budget ledger ────────────────────────────────────────────────────
 
-export const SESSION_CHAT_BUDGET = { turns: 20, window_hours: 24 } as const;
-export const SESSION_BUDGET_WINDOW_MS = SESSION_CHAT_BUDGET.window_hours * 3_600_000;
+export const CHAT_TIERS = { free: 5, plus: 200 } as const;
+export type ChatTier = keyof typeof CHAT_TIERS;
+export const SESSION_BUDGET_WINDOW_MS = 24 * 3_600_000;
+/** @deprecated kept for old imports; equals the free tier. */
+export const SESSION_CHAT_BUDGET = { turns: CHAT_TIERS.free, window_hours: 24 } as const;
 
 /** The one store method the ledger needs — exactly the RateLimitDurableObject
  *  stub surface, so the existing DO is the production implementation. */
@@ -110,7 +113,7 @@ export interface SessionBudgetDecision {
  */
 export function sessionBudgetKey(userId: string | null, actorKey: string): string {
   const actor = actorKey.replace(/^v1:/, "");
-  return userId ? `session-chat-budget:v1:account:${userId}` : `session-chat-budget:v1:anon:${actor}`;
+  return userId ? `session-chat-budget:v2:account:${userId}` : `session-chat-budget:v2:anon:${actor}`;
 }
 
 /** Charge ONE chat turn against the account's session budget. */
@@ -118,24 +121,17 @@ export async function consumeSessionTurnBudget(
   store: SessionBudgetStore | undefined,
   key: string,
   weight = 1,
-): Promise<SessionBudgetDecision> {
-  if (!store) return { allowed: true, retryAfterSeconds: 0, persisted: false };
+  cap: number = CHAT_TIERS.free,
+): Promise<SessionBudgetDecision & { cap: number; remaining: number | null }> {
+  if (!store) return { allowed: true, retryAfterSeconds: 0, persisted: false, cap, remaining: null };
   try {
-    const decision = await store.consume(SESSION_CHAT_BUDGET.turns, SESSION_BUDGET_WINDOW_MS, weight);
-    return {
-      allowed: decision.success,
-      retryAfterSeconds: decision.retryAfterSeconds,
-      persisted: true,
-    };
+    const d = await store.consume(cap, SESSION_BUDGET_WINDOW_MS, weight);
+    return { allowed: d.success, retryAfterSeconds: d.retryAfterSeconds, persisted: true, cap, remaining: (d as { remaining?: number }).remaining ?? null };
   } catch (err) {
     // Fail-open by contract (CLAUDE.md): a budget-store outage must never take
     // chat down. Log it by name so the degradation is observable.
-    console.error(JSON.stringify({
-      event: "session_budget_unavailable",
-      fallback: "allow",
-      detail: String(err instanceof Error ? err.message : err).slice(0, 120),
-    }));
-    return { allowed: true, retryAfterSeconds: 0, persisted: false };
+    console.error(JSON.stringify({ event: "session_budget_unavailable", fallback: "allow", detail: String(err instanceof Error ? err.message : err).slice(0, 120) }));
+    return { allowed: true, retryAfterSeconds: 0, persisted: false, cap, remaining: null };
   }
 }
 

@@ -134,13 +134,24 @@ describe("budget/deadline — session budget ledger", () => {
     expect(aiRun).not.toHaveBeenCalled();
   });
 
+  it("gratis konto: tur 6 giver 429", async () => {
+    const fetchSpy = authFetchMock();
+    const { namespace } = fakeNamespace();
+    const aiRun = vi.fn().mockResolvedValue({ response: "Hej!" });
+    const env = baseEnv(aiRun, { RATE_LIMITER: namespace });
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i++) statuses.push((await worker.fetch!(authedChat("user-free"), env, executionContext())).status);
+    fetchSpy.mockRestore();
+    expect(statuses).toEqual([200, 200, 200, 200, 200, 429]);
+  });
+
   it("charges the ledger once per turn when allowed (persisted account-scoped)", async () => {
     const { consume, namespace } = fakeNamespace({ success: true, retryAfterSeconds: 0 });
     const aiRun = vi.fn().mockRejectedValue(new Error("Workers AI 500 upstream"));
     const env = baseEnv(aiRun, { RATE_LIMITER: namespace });
     await worker.fetch!(chatRequest("godmorgen"), env, executionContext());
-    // Exactly ONE charge carries the session cap (20 turns / 24h):
-    const sessionCharges = (consume as any).mock.calls.filter((c: unknown[]) => c[0] === 20);
+    // Exactly ONE charge carries the session cap (5 free turns / 24h):
+    const sessionCharges = (consume as any).mock.calls.filter((c: unknown[]) => c[0] === 5);
     expect(sessionCharges).toHaveLength(1);
     expect(typeof sessionCharges[0]![2]).toBe("number"); // weight 1 per turn
   });
@@ -345,7 +356,7 @@ describe("budget/deadline — response byte cap on ALL reply paths", () => {
 describe("budget/deadline — account-key isolation at /chat level (name-respecting DO)", () => {
   it("account A exhausted does not exhaust account B; each charge uses its own account key", async () => {
     const fetchSpy = authFetchMock();
-    const { namespace, names } = fakeNamespace(undefined, { preset: { "session-chat-budget:v1:account:user-A": 20 } });
+    const { namespace, names } = fakeNamespace(undefined, { preset: { "session-chat-budget:v2:account:user-A": 5 } });
     const aiRun = vi.fn().mockResolvedValue({ response: "Hej!" });
     const env = baseEnv(aiRun, { RATE_LIMITER: namespace });
     const a = await worker.fetch!(authedChat("user-A"), env, executionContext());
@@ -353,8 +364,8 @@ describe("budget/deadline — account-key isolation at /chat level (name-respect
     const b = await worker.fetch!(authedChat("user-B"), env, executionContext());
     fetchSpy.mockRestore();
     expect(b.status).toBe(200);
-    expect(names).toContain("session-chat-budget:v1:account:user-A");
-    expect(names).toContain("session-chat-budget:v1:account:user-B");
+    expect(names).toContain("session-chat-budget:v2:account:user-A");
+    expect(names).toContain("session-chat-budget:v2:account:user-B");
   });
 
   it("store outage for the session key fails OPEN at request level (200, model called)", async () => {
