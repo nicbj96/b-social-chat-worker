@@ -27,6 +27,22 @@ import { runAiCounted, aiCostSnapshot, setAiUsageReporter } from "./aiCost";
 import { proposeIntentChange, type IntentProposal } from "./chat-intent-proposal";
 import { buildGroundedSources, groundModelReply, type GroundedToolResult } from "./grounded-answer";
 import { TurnBudget, TurnBudgetExceeded } from "./chat-budget";
+import {
+  TurnDeadline,
+  TurnDeadlineExceeded,
+  ResourceCapExceeded,
+  RESOURCE_CAPS,
+  assertEmbeddingDims,
+  capReplyBytes,
+  capRows,
+  classifyProviderFailure,
+  consumeSessionTurnBudget,
+  degradationNotice,
+  sessionBudgetKey,
+  turnDeadlineMs,
+  type DegradationReason,
+} from "./chat-provider";
+import { rateLimitActorKey } from "./ratelimit";
 import { aiBreakerIsOpen, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 import type { DiscoveryIntent } from "./discovery-fallback";
 
@@ -56,6 +72,7 @@ interface Env extends RateLimitEnv {
   ADMIN_ASK_KEY?: string; // Phase 2.5: gates /admin/ask (Telegram "bare spørg")
   WHISPER_MODEL?: string; // Phase 7: override speech-to-text model
   ELEVENLABS_API_KEY?: string; // Phase 7.4: if set, use ElevenLabs Scribe (best Danish STT) as primary
+  CHAT_TURN_DEADLINE_MS?: string; // Plan §9 P188: per-turn wall-clock budget override (tests)
 }
 
 // Chat message type
@@ -1323,12 +1340,33 @@ async function catalogueFallbackForTurn(
   env: Env,
   userMessages: ChatMessage[],
   context: { user_prefs?: { city?: string } },
+  // Plan §9 P190: a degraded provider must be DECLARED in the response — the
+  // deterministic answer never masquerades as an assistant success.
+  degradation?: { reason: DegradationReason; retryAfterSeconds?: number },
 ): Promise<Response> {
+  const extraHeaders =
+    degradation?.reason === "provider_429"
+      ? { "Retry-After": String(degradation.retryAfterSeconds ?? 60) }
+      : undefined;
+  const degradationField = degradation ? degradationNotice(degradation.reason, degradation.retryAfterSeconds) : null;
+  const withDegradation = (payload: any): any =>
+    degradationField ? { ...payload, degraded: true, degradation: degradationField } : payload;
   const latest = latestUserMessage(userMessages);
   if (!isDiscoverySeekingMessage(latest)) {
-    return jsonResponse(formatNonCatalogueReply(latest));
+    return jsonResponse(withDegradation(formatNonCatalogueReply(latest)), 200, extraHeaders);
   }
-  return await directDiscoveryFallback(env, userMessages, context);
+  const res = await directDiscoveryFallback(env, userMessages, context);
+  // directDiscoveryFallback queries the catalogue LIVE on every call — the
+  // degraded answer is freshly grounded, never a cached/fake replay.
+  const body = await res.json();
+  return jsonResponse(withDegradation(body), 200, extraHeaders);
+}
+
+/** Map an upstream failure to the degradation contract, 429 carrying its
+ *  Retry-After guidance (Plan §9 P190). */
+function providerDegradation(error: unknown): { reason: DegradationReason; retryAfterSeconds?: number } {
+  const reason = classifyProviderFailure(error);
+  return reason === "provider_429" ? { reason, retryAfterSeconds: 60 } : { reason };
 }
 
 async function handleChat(request: Request, env: Env, executionCtx: ExecutionContext): Promise<Response> {
@@ -1445,6 +1483,26 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       return jsonResponse({ error: "Ugyldige chatbeskeder" }, 400);
     }
     fallbackMessages = userMessages;
+
+    // Plan §9 P189/M41: the per-session/per-account turn ledger, persisted
+    // account-scoped in the Durable Object store. Exhaustion is a NAMED 429
+    // (session_budget_exhausted) with Retry-After and a Danish message; a
+    // missing/broken store fails open (the per-actor rate limiter still
+    // applies) and never takes chat down.
+    const sessionBudgetKey_ = sessionBudgetKey(userId, await rateLimitActorKey(request, "/chat"));
+    const sessionBudget = await consumeSessionTurnBudget(
+      env.RATE_LIMITER ? env.RATE_LIMITER.getByName(sessionBudgetKey_) : undefined,
+      sessionBudgetKey_,
+    );
+    if (!sessionBudget.allowed) {
+      console.error(JSON.stringify({ event: "session_budget_exhausted", persisted: sessionBudget.persisted }));
+      const notice = degradationNotice("session_budget_exhausted", sessionBudget.retryAfterSeconds);
+      return jsonResponse(
+        { error: "session_budget_exhausted", retry_after_seconds: sessionBudget.retryAfterSeconds, degraded: true, degradation: notice, notice: notice.notice },
+        429,
+        { "Retry-After": String(sessionBudget.retryAfterSeconds) },
+      );
+    }
 
     executionCtx.waitUntil(notifyCommandCenter(env, latestUserMessage(userMessages), body.context || {}));
 
@@ -1565,6 +1623,12 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       ...userMessages,
     ];
 
+    // Plan §9 P188/M41: one wall-clock deadline for the whole turn. Expiry is
+    // a NAMED error (turn_deadline_exceeded), distinct from a model/upstream
+    // failure — a timed-out turn is OUR budget spent, not the provider being
+    // sick, so it must not open the AI breaker or fake a completion.
+    const deadline = new TurnDeadline(turnDeadlineMs(env.CHAT_TURN_DEADLINE_MS));
+
     // Breaker: once the AI has failed repeatedly, calling it again only spends
     // the reader's patience on a timeout we already expect. Go straight to the
     // grounded database answer.
@@ -1578,12 +1642,16 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
     const budget = new TurnBudget();
     try {
       budget.reserveModel();
-      aiResponse = await runAiCounted(env.AI, "@cf/meta/llama-4-scout-17b-16e-instruct", {
+      aiResponse = await deadline.race(runAiCounted(env.AI, "@cf/meta/llama-4-scout-17b-16e-instruct", {
         messages,
         tools: TOOLS,
         tool_choice: "auto",
-      });
+      }));
     } catch (error) {
+      if (error instanceof TurnDeadlineExceeded) {
+        console.error(JSON.stringify({ event: "turn_deadline_exceeded", phase: "first_model_call" }));
+        return catalogueFallbackForTurn(env, userMessages, ctx, { reason: "turn_deadline_exceeded" });
+      }
       // ANY AI failure falls back, not just a quota error. The database answer
       // is grounded and useful; rethrowing gave the reader nothing at all.
       recordAiFailure();
@@ -1592,9 +1660,13 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
         quota: isAiQuotaError(error),
         detail: String(error instanceof Error ? error.message : error).slice(0, 140),
       }));
-      return catalogueFallbackForTurn(env, userMessages, ctx);
+      return catalogueFallbackForTurn(env, userMessages, ctx, providerDegradation(error));
     }
     recordAiSuccess();
+
+    // A turn that hit the wall clock mid-tools gets an HONEST PARTIAL answer:
+    // only what the tools actually retrieved, with the deadline declared.
+    let deadlineHitMidTools = false;
 
     // If the model wants to call tools, execute them
     if (aiResponse.tool_calls && aiResponse.tool_calls.length > 0) {
@@ -1619,6 +1691,13 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
     const turnActionMemo = new Map<string, Record<string, unknown>>();
 
             for (const toolCall of aiResponse.tool_calls) {
+              // Plan §9 P188: a tool that would start after the wall clock
+              // expired must not start. The turn degrades honestly below.
+              if (deadline.expired()) {
+                deadlineHitMidTools = true;
+                toolResultErrors.push("turn_deadline_exceeded");
+                break;
+              }
               const fnName = toolCall.function.name;
               const fnArgs = parseToolArgs(toolCall.function?.arguments);
 
@@ -1665,11 +1744,22 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                         // Plan §9 P188: at most ONE embedding call per turn; a
                         // second one is refused by name and reported as an
                         // error, never replaced by a fake answer.
+                        // Plan §9 P188: at most ONE embedding call per turn; a
+                        // second one is refused by name and reported as an
+                        // error, never replaced by a fake answer. The call is
+                        // also raced against the turn deadline so a hung
+                        // embedding cannot spend the whole wall clock.
                         budget.reserveEmbedding();
-                        const emb: any = await runAiCounted(env.AI, "@cf/baai/bge-m3", { text: [fnArgs.query] });
+                        const emb: any = await deadline.race(runAiCounted(env.AI, "@cf/baai/bge-m3", { text: [fnArgs.query] }));
                         vec = emb?.data?.[0];
+                        // M41 resource cap: assert the vector shape/dimension
+                        // before it reaches the RPC — a wrong-shaped vector is
+                        // a named cap error, never a silently degraded search.
+                        if (vec) assertEmbeddingDims(vec);
                       } catch (err) {
                         if (err instanceof TurnBudgetExceeded) out.events_error = "budget_exhausted_embedding_calls";
+                        else if (err instanceof TurnDeadlineExceeded) { out.events_error = "turn_deadline_exceeded"; deadlineHitMidTools = true; }
+                        else if (err instanceof ResourceCapExceeded) { out.events_error = `cap_exceeded_${err.cap}`; vec = undefined; }
                         else { console.error("Events embedding failed:", err); }
                       }
                       if (!vec && !out.events_error) out.events_error = "embedding_failed";
@@ -1682,6 +1772,11 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                           filter_country: fnArgs.country ?? bbox?.country ?? null,
                           ...bboxParams,
                         }, () => { out.events_error = "rpc_failed"; });
+                        // M41 row cap: the model is never handed more than one
+                        // page; a cap is flagged, not hidden.
+                        const capped = capRows(out.events || []);
+                        out.events = capped.rows;
+                        if (capped.capped) out.rows_capped = RESOURCE_CAPS.rows;
                       }
                       (out.events || []).forEach((e: any) => {
                         if (!e?.id) return;
@@ -1986,23 +2081,38 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
         });
       }
 
-      // Second AI call — now with data from Supabase
+      // Second AI call — now with data from Supabase. Skipped entirely when
+      // the turn deadline expired mid-tools (Plan §9 P188): the honest
+      // partial answer is built from what the tools retrieved, never from an
+      // invented wrap-up.
       let finalResponse: any;
-      try {
-        budget.reserveModel();
-        finalResponse = await runAiCounted(env.AI, "@cf/meta/llama-4-scout-17b-16e-instruct", {
-          messages,
-        });
-      } catch (error) {
-        // Same rule as the first call: any failure falls back to grounded
-        // database results rather than giving the reader nothing.
-        recordAiFailure();
-        console.error(JSON.stringify({
-          event: "ai_followup_failed",
-          quota: isAiQuotaError(error),
-          detail: String(error instanceof Error ? error.message : error).slice(0, 140),
-        }));
-        return catalogueFallbackForTurn(env, userMessages, ctx);
+      if (deadlineHitMidTools || deadline.expired()) {
+        deadlineHitMidTools = true;
+        finalResponse = null;
+        console.error(JSON.stringify({ event: "turn_deadline_exceeded", phase: "followup_skipped" }));
+      } else {
+        try {
+          budget.reserveModel();
+          finalResponse = await deadline.race(runAiCounted(env.AI, "@cf/meta/llama-4-scout-17b-16e-instruct", {
+            messages,
+          }));
+        } catch (error) {
+          if (error instanceof TurnDeadlineExceeded) {
+            deadlineHitMidTools = true;
+            finalResponse = null;
+            console.error(JSON.stringify({ event: "turn_deadline_exceeded", phase: "followup_call" }));
+          } else {
+            // Same rule as the first call: any failure falls back to grounded
+            // database results rather than giving the reader nothing.
+            recordAiFailure();
+            console.error(JSON.stringify({
+              event: "ai_followup_failed",
+              quota: isAiQuotaError(error),
+              detail: String(error instanceof Error ? error.message : error).slice(0, 140),
+            }));
+            return catalogueFallbackForTurn(env, userMessages, ctx, providerDegradation(error));
+          }
+        }
       }
 
       // Collect tag slugs from tool arguments (for live filter update on frontend)
@@ -2027,22 +2137,39 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       // faked "no results". Evidence without any rows plus a named error is a
       // failed retrieval; evidence without rows and no error is genuinely empty.
       const groundedSources = buildGroundedSources(groundedToolResults);
+      const isNamedError = (code: string) =>
+        ["budget_exhausted_embedding_calls", "embedding_failed", "rpc_failed", "rpc_unreachable", "turn_deadline_exceeded"].includes(code)
+        || code.startsWith("cap_exceeded_");
       const namedError = groundedToolResults.length === 0
-        ? toolResultErrors.find(code =>
-            ["budget_exhausted_embedding_calls", "embedding_failed", "rpc_failed", "rpc_unreachable"].includes(code)) ?? null
+        ? toolResultErrors.find(isNamedError) ?? null
         : null;
-      const repaired = repairContradictoryGroundedReply(
-        finalResponse.response || finalResponse.content || "",
-        collectedPlaces,
-        collectedEvents,
-        inferResponseLanguage(userMessages.map((m) => m.content).join(" ")),
-      );
-      const grounded = groundModelReply(repaired, groundedSources, {
-        lang: inferResponseLanguage(userMessages.map((m) => m.content).join(" ")) === "en" ? "en" : "da",
-        retrievalError: namedError ?? null,
-      });
+      const replyLang = inferResponseLanguage(userMessages.map((m) => m.content).join(" ")) === "en" ? "en" : "da";
+      // Plan §9 P188 / M41: a deadline-expired turn answers honestly from the
+      // tool evidence alone — no second model call, no invented completion.
+      // groundModelReply with empty model text renders ONLY verified rows.
+      let grounded: { reply: string; grounding: string; corrections: string[] };
+      let deadlineDegradation: ReturnType<typeof degradationNotice> | undefined;
+      if (deadlineHitMidTools) {
+        const partial = groundModelReply("", groundedSources, { lang: replyLang, retrievalError: namedError ?? null });
+        deadlineDegradation = degradationNotice("turn_deadline_exceeded");
+        grounded = {
+          reply: partial.reply ? `${deadlineDegradation.notice}\n\n${partial.reply}` : deadlineDegradation.notice,
+          grounding: partial.grounding,
+          corrections: partial.corrections,
+        };
+      } else {
+        const repaired = repairContradictoryGroundedReply(
+          finalResponse.response || finalResponse.content || "",
+          collectedPlaces,
+          collectedEvents,
+          replyLang,
+        );
+        grounded = groundModelReply(repaired, groundedSources, { lang: replyLang, retrievalError: namedError ?? null });
+      }
 
-      return jsonResponse({
+      // M41 resource cap: the response payload is byte-capped, and any cut is
+      // flagged on the payload — never a silently clipped answer.
+      const chatPayload = capReplyBytes({
               reply: grounded.reply,
               grounding: grounded.grounding,
               corrections: grounded.corrections,
@@ -2051,8 +2178,11 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
               place_ids: collectedPlaceIds,
               event_ids: collectedEventIds,
               suggested_tag_slugs: [...new Set(collectedTagSlugs)],
+              partial: deadlineHitMidTools || undefined,
+              ...(deadlineDegradation ? { degraded: true, degradation: deadlineDegradation } : {}),
               budget: budget.snapshot(),
             });
+      return jsonResponse(chatPayload.payload);
           }
 
     // No tool calls — never invent discovery results. Fall back to direct DB search.
@@ -2109,7 +2239,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
 }
 
 // Helper to create JSON responses with CORS
-function jsonResponse(data: any, status = 200): Response {
+function jsonResponse(data: any, status = 200, extraHeaders?: Record<string, string>): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
@@ -2119,6 +2249,7 @@ function jsonResponse(data: any, status = 200): Response {
       // say something different" stops being checkable.
       "X-Prompt-Version": PROMPT_VERSION,
       ...CORS_HEADERS,
+      ...extraHeaders,
     },
   });
 }
