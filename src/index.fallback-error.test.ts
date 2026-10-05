@@ -100,3 +100,22 @@ describe("directDiscoveryFallback — date + relaxation (audit #1)", () => {
     expect(search.mock.calls[0][1].category).toBe("familie");
   });
 });
+
+describe("directDiscoveryFallback — weekend filter (audit #2)", () => {
+  it("'jazz i Aarhus i weekenden' passes a Fri 17:00–Mon 00:00 window to the event query", async () => {
+    const search = queries.searchEvents as any;
+    search.mockReset();
+    search.mockResolvedValue({ results: [{ id: "00000000-0000-4000-8000-0000000000d1", title: "Jazz", location: "Aarhus", date: "x" }] });
+    (queries.searchPlaces as any).mockResolvedValue({ results: [] });
+    const ai = vi.fn().mockRejectedValue(new Error("model down"));
+    await worker.fetch(chatRequest("jazz i Aarhus i weekenden"), baseEnv(ai), executionContext());
+    const args = search.mock.calls[0][1];
+    expect(args.date_from).toBeTruthy();
+    expect(args.date_to).toBeTruthy();
+    const f = new Date(args.date_from), t = new Date(args.date_to);
+    const cph = (d: Date) => new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Copenhagen", weekday: "short", hour: "2-digit", hourCycle: "h23" }).format(d);
+    expect(cph(f)).toContain("Fri");
+    expect(cph(f)).toContain("17");
+    expect(cph(t)).toContain("Mon");
+  });
+});

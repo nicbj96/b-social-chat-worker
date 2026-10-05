@@ -44,4 +44,31 @@ describe("resolveDateWindow (Europe/Copenhagen)", () => {
     expect(w.from).toBe("2026-10-24T22:00:00.000Z"); // still CEST at 00:00
     expect(w.to).toBe("2026-10-25T23:00:00.000Z"); // 25 h day, midnight is CET
   });
+
+  describe("weekend = Friday 17:00 to Sunday 23:59 local", () => {
+    const from = "2026-10-09T15:00:00.000Z"; // Fri 17:00 CEST
+    const to = "2026-10-11T22:00:00.000Z"; // Mon 00:00 CEST (exclusive)
+    it.each([
+      ["Monday", MON],
+      ["Wednesday", WED],
+      ["Friday morning", new Date("2026-10-09T06:00:00Z")],
+      ["Friday evening", new Date("2026-10-09T18:00:00Z")],
+      ["Saturday", new Date("2026-10-10T10:00:00Z")],
+      ["Sunday 23:30 local", new Date("2026-10-11T21:30:00Z")],
+    ])("on %s gives the current/upcoming weekend", (_n, now) => {
+      const w = resolveDateWindow("jazz i Aarhus i weekenden", now)!;
+      expect(w.from).toBe(from);
+      expect(w.to).toBe(to);
+      expect(w.label).toBe("i weekenden");
+    });
+    it("rolls to the NEXT weekend once Sunday is over", () => {
+      const w = resolveDateWindow("i weekenden", new Date("2026-10-11T22:30:00Z"))!; // Mon 00:30 local
+      expect(w.from).toBe("2026-10-16T15:00:00.000Z");
+      expect(w.to).toBe("2026-10-18T22:00:00.000Z");
+    });
+    it("also matches 'denne weekend' / 'weekend'", () => {
+      expect(resolveDateWindow("denne weekend", WED)).not.toBeNull();
+      expect(resolveDateWindow("find events this weekend", WED)).not.toBeNull();
+    });
+  });
 });

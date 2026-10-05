@@ -95,5 +95,15 @@ export function resolveDateWindow(message: string, now: Date = new Date()): Date
   for (const wd of WEEKDAYS) {
     if (wd.re.test(text)) return dayWindow(addDays(today, (wd.dow - today.dow + 7) % 7), wd.label);
   }
+  if (/(?<!\p{L})weekend\p{L}*/iu.test(text)) {
+    // Fri 17:00 -> Sun 23:59 local (exclusive end: Mon 00:00). From Monday
+    // 00:00 on, the weekend that just ended is over, so it means the next one.
+    const friday = addDays(today, today.dow === 0 ? -2 : today.dow === 6 ? -1 : 5 - today.dow);
+    return {
+      from: new Date(localInstant(friday, 17)).toISOString(),
+      to: new Date(localInstant(addDays(friday, 3))).toISOString(),
+      label: "i weekenden",
+    };
+  }
   return null;
 }
