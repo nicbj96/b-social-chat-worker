@@ -94,6 +94,12 @@ async function chatEvents(rows: ReturnType<typeof event>[], args: Record<string,
 }
 
 describe("search_events facts through the /chat caller", () => {
+  it.each([["79436801",50],["76424351",390]])("C13 CHF UID %s survives real SDK/tool",async(uid,price)=>{
+    const evidence={source_uid:uid,raw:`CHF ${price}`};
+    const {result,queries}=await chatEvents([event({price,price_currency:"CHF",price_evidence:evidence})]);
+    expect(result.results[0]).toMatchObject({price:`${price} CHF`,currency:"CHF",price_amount:price,price_evidence:evidence,timezone:null});
+    expect(queries[0].searchParams.get("select")).toContain("price_currency");
+  });
   it.each([
     [null, "Pris ukendt"], [undefined, "Pris ukendt"], [0, "Gratis"],
     [45.5, "45.5 (valuta ukendt)"], [-1, "Pris ukendt"], ["0", "Pris ukendt"],

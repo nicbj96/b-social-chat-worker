@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { explicitCurrency, eventPriceLabel } from "./event-price";
 import type { ToolCallArgs } from "./tools";
 import { normalizeCategory } from "./category-vocabulary";
 
@@ -67,7 +68,7 @@ export async function searchEvents(
 
   let query = supabase
     .from("events")
-    .select("id, title, description, location, date, end_date, all_day, status, country, source, url, category, price, interest_tags, suitable_for_modes, indoor_outdoor")
+    .select("id, title, description, location, date, end_date, all_day, status, country, source, url, category, price, price_currency, price_evidence, interest_tags, suitable_for_modes, indoor_outdoor")
     .not("date", "is", null)
     .or("status.eq.active,status.is.null")
     // Known end: include ongoing until (not including) end. Unknown end:
@@ -131,14 +132,14 @@ export async function searchEvents(
       country: e.country ?? null,
       source: e.source ?? null,
       url: e.url ?? null,
-      // These columns do not exist in the events schema. Unknown is not DKK
-      // or Copenhagen, even when a row has a country.
+      // Currency columns require discovery_search_v1 schema gate before release.
+      // Event timezone remains unknown; country is never evidence.
       timezone: null,
-      currency: null,
+      currency: explicitCurrency(e.price_currency),
+      price_evidence: e.price_evidence ?? null,
       price_amount: e.price ?? null,
       category: e.category,
-      price: typeof e.price !== "number" || !Number.isFinite(e.price) || e.price < 0
-        ? "Pris ukendt" : e.price === 0 ? "Gratis" : `${e.price} (valuta ukendt)`,
+      price: eventPriceLabel(e.price, e.price_currency),
       tags: e.interest_tags?.join(", "),
       modes: e.suitable_for_modes?.join(", "),
       indoor_outdoor: e.indoor_outdoor,

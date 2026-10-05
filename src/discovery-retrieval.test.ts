@@ -12,6 +12,12 @@ async function chat(discovery_intent:any=intent,discovery_cursor?:any){
  return worker.fetch!(new Request('https://worker.test/chat',{method:'POST',headers:{'content-type':'application/json','cf-connecting-ip':`203.0.113.${++ip}`},body:JSON.stringify({messages:[{role:'user',content:'Find noget'}],discovery_intent,...(discovery_cursor?{discovery_cursor}:{})})}),{AI:{run},SUPABASE_URL:'https://fixture.supabase.co',SUPABASE_KEY:'fixture-key'} as any,{waitUntil:vi.fn(),passThroughOnException:vi.fn(),props:{}} as any);
 }
 describe('deterministic discovery through actual /chat handler and SDK',()=>{
+ it.each([[50,'CHF','50 CHF'],[390,'CHF','390 CHF'],[50,'kr','50 (valuta ukendt)'],[null,'CHF','Pris ukendt']])('C14 explicit price %s currency %s',async(price,currency,label)=>{
+  const data={...page.items[0].data,price,price_currency:currency,price_evidence:{raw:'fixture'}};
+  response=Response.json({...page,items:[{kind:'event',data}]});
+  const res=await chat({...intent,price:null});const body:any=await res.json();
+  expect(body.reply).toContain(label);expect(body.sources[0].verified_fields).toEqual(data);expect(run).not.toHaveBeenCalled();
+ });
  it('valid intent reaches the exact RPC, produces grounded IDs and no model/telemetry call',async()=>{
   const res=await chat();expect(res.status).toBe(200);const body:any=await res.json();
   expect(body.event_ids).toEqual([id]);expect(body.applied_filters).toEqual(intent);

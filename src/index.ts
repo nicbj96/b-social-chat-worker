@@ -1,3 +1,4 @@
+import { eventPriceLabel } from "./event-price";
 import { parseSearchIntent } from "./discovery-contract";
 import * as Sentry from "@sentry/cloudflare";
 import { cityToBBox } from "./city-bbox";
@@ -1405,8 +1406,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
         const labels=page.items.map(item=>{
           const d=item.data;
           if(item.kind==='place') return String(d.name);
-          const price=typeof d.price==='number' && Number.isFinite(d.price) && d.price>=0
-            ? d.price===0?'Gratis':`${d.price} ${typeof d.price_currency==='string'?d.price_currency:'(valuta ukendt)'}`:'Pris ukendt';
+          const price=eventPriceLabel(d.price, d.price_currency);
           return `${d.title} — ${price}`;
         });
         return jsonResponse({reply:labels.length?labels.join('\n'):'Ingen resultater med de valgte filtre.',
