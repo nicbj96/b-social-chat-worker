@@ -4,6 +4,8 @@ import { advanceRateLimitWindow, type RateLimitWindow } from "./rate-limit-windo
 export interface DurableRateLimitDecision {
   success: boolean;
   retryAfterSeconds: number;
+  /** Charges left in the current window (0 when exhausted). */
+  remaining?: number;
 }
 
 export class RateLimitDurableObject extends DurableObject {
@@ -16,6 +18,7 @@ export class RateLimitDurableObject extends DurableObject {
       return {
         success: decision.success,
         retryAfterSeconds: decision.retryAfterSeconds,
+        remaining: Math.max(0, limit - decision.window.count),
       };
     });
   }
