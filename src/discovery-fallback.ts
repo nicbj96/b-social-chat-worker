@@ -554,8 +554,10 @@ export function formatFallbackReply(
       url: `/event/${event.id}`,
       verified_fields: {
         id: String(event.id),
-        title: event.title,
-        location: event.location ?? null,
+        // Bounded: capReplyBytes can only shrink `reply`, so unbounded text
+        // duplicated here could push the payload past the response cap.
+        title: event.title?.slice(0, 200),
+        location: event.location?.slice(0, 200) ?? null,
         date: event.date ?? null,
         latitude: Number.isFinite(event.latitude) ? event.latitude : null,
         longitude: Number.isFinite(event.longitude) ? event.longitude : null,
