@@ -78,3 +78,25 @@ describe("directDiscoveryFallback — DB error vs empty", () => {
     expect(body.retrieval_error).not.toBe(true);
   });
 });
+
+describe("directDiscoveryFallback — date + relaxation (audit #1)", () => {
+  const KIDS = { id: "00000000-0000-4000-8000-0000000000c1", title: "Børneteater", location: "Aarhus", date: "2026-10-18" };
+
+  it("'noget for børn på søndag i Aarhus' is answered, not 'kan ikke svare', and says what was loosened", async () => {
+    (queries.searchPlaces as any).mockResolvedValue({ results: [] });
+    const search = (queries.searchEvents as any);
+    search.mockReset();
+    search.mockImplementation(async (_s: unknown, args: any) =>
+      args.date_from ? { results: [] } : { results: [KIDS] });
+    const ai = vi.fn().mockRejectedValue(new Error("model down"));
+    const res = await worker.fetch(chatRequest("noget for børn på søndag i Aarhus"), baseEnv(ai), executionContext());
+    const body: any = await res.json();
+    expect(body.reply).not.toContain("kan ikke svare");
+    expect(body.reply).toContain("Børneteater");
+    expect(body.reply).toContain("datoen");
+    expect(body.event_ids).toEqual([KIDS.id]);
+    // first call carried the Copenhagen window for Sunday
+    expect(search.mock.calls[0][1].date_from).toMatch(/Z$/);
+    expect(search.mock.calls[0][1].category).toBe("familie");
+  });
+});

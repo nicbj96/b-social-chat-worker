@@ -1,3 +1,5 @@
+import { resolveDateWindow, type DateWindow } from "./date-window";
+
 export type DiscoveryKind = "places" | "events" | "both";
 export type ResponseLanguage = "da" | "en";
 
@@ -7,6 +9,8 @@ export type DiscoveryIntent = {
   placeCategory?: string;
   eventCategory?: string;
   queryTag?: string;
+  /** Resolved Europe/Copenhagen window for "på søndag", "i morgen", ... */
+  dateWindow?: DateWindow;
   limit: number;
 };
 
@@ -148,8 +152,9 @@ const CATEGORY_RULES = [
   { test: /\b(motion|fitness|løb|cykel|sport)\w*/iu, placeCategory: "motion-fitness", eventCategory: "sport", tag: "sport" },  // was "motion": 0 events carry it
 ] as const;
 
-export function inferDiscoveryIntent(message: string, contextCity?: string): DiscoveryIntent {
+export function inferDiscoveryIntent(message: string, contextCity?: string, now: Date = new Date()): DiscoveryIntent {
   const text = String(message || "").trim();
+  const dateWindow = resolveDateWindow(text, now);
   const lower = text.toLocaleLowerCase("da-DK");
   // "museer" is the Danish plural of "museum" and it changes the stem, so the
   // trailing \w* cannot reach it the way it reaches "restauranter" or
@@ -179,7 +184,7 @@ export function inferDiscoveryIntent(message: string, contextCity?: string): Dis
   // after checking it in isolation: it is unambiguously an event word, and
   // it changes exactly one of the six routing cases (the quidditch query)
   // while leaving steder/restauranter/natursteder/museer untouched.
-  const eventSignal = /(event|events|koncert|festival|jazz|aktivitet|aktiviteter|weekend|i aften|turnering)\w*/iu.test(text);
+  const eventSignal = /(event|events|koncert|festival|jazz|aktivitet|aktiviteter|weekend|i aften|turnering)\w*/iu.test(text) || dateWindow !== null;
   const kind: DiscoveryKind = placeSignal && eventSignal ? "both" : placeSignal ? "places" : eventSignal ? "events" : "both";
 
 /**
@@ -275,7 +280,12 @@ function fuzzyCity(text: string): string | undefined {
   const category = CATEGORY_RULES.find((rule) => rule.test.test(text));
   const requested = Number(text.match(/\b([1-8])\b/u)?.[1] || 4);
 
-  const intent: DiscoveryIntent = { kind, ...(city ? { city } : {}), limit: Math.min(8, Math.max(1, requested)) };
+  const intent: DiscoveryIntent = {
+    kind,
+    ...(city ? { city } : {}),
+    ...(dateWindow ? { dateWindow } : {}),
+    limit: Math.min(8, Math.max(1, requested)),
+  };
   if (category) {
     if (kind !== "events") intent.placeCategory = category.placeCategory;
     if (kind !== "places") intent.eventCategory = category.eventCategory;
@@ -291,7 +301,56 @@ export function isDiscoverySeekingMessage(message: string): boolean {
   const hasVerb = /\b(find|vis|søg|anbefal|show|recommend|search|looking for|hvad sker|hvad kan|er der)\b/iu.test(text);
   const hasNoun = /\b(event|events|sted|steder|koncert|festival|jazz|aktivitet|aktiviteter|museum|restaurant|café|cafe|park|skov|turnering)\w*\b/iu.test(text);
   const hasCity = /\b(kbh|cph|københavn|copenhagen|aarhus|århus|aalborg|ålborg|odense|malmö|malmo|frederikshavn|skagen|thisted)\b/iu.test(text);
-  return (hasVerb && (hasNoun || hasCity)) || (hasNoun && hasCity);
+  // "noget for børn på søndag i Aarhus" has no verb and no noun from the list
+  // above, only a city, a category word and a date. That is still a discovery
+  // question; treating it as chit-chat answered it with "Det kan jeg ikke svare
+  // på lige nu" while the catalogue was perfectly able to answer.
+  const hasCategory = CATEGORY_RULES.some((rule) => rule.test.test(text));
+  const hasDate = resolveDateWindow(text) !== null;
+  return (hasVerb && (hasNoun || hasCity)) || (hasNoun && hasCity) || (hasCity && (hasCategory || hasDate));
+}
+
+export type Relaxation = "date" | "category";
+export type EventFilters = { city?: string; category?: string; tags?: string; date_from?: string; date_to?: string };
+
+/**
+ * Event search that loosens gradually instead of answering empty while the
+ * city has events: all filters -> drop date -> drop category (city alone).
+ * The city is never dropped (that would answer about the wrong place) and
+ * `relaxed` says exactly what was loosened so the copy can be honest.
+ */
+export async function searchEventsRelaxing(
+  intent: DiscoveryIntent,
+  search: (filters: EventFilters) => Promise<{ results?: any[]; error?: string }>,
+): Promise<{ results: any[]; error?: string; relaxed: Relaxation[] }> {
+  const useSpecificTag = intent.queryTag && intent.queryTag !== intent.eventCategory;
+  const base: EventFilters = {
+    city: intent.city,
+    category: useSpecificTag ? undefined : intent.eventCategory,
+    tags: useSpecificTag ? intent.queryTag : undefined,
+  };
+  const hasCategory = Boolean(base.category || base.tags);
+  const steps: Array<{ filters: EventFilters; relaxed: Relaxation[] }> = [
+    {
+      filters: {
+        ...base,
+        ...(intent.dateWindow ? { date_from: intent.dateWindow.from, date_to: intent.dateWindow.to } : {}),
+      },
+      relaxed: [],
+    },
+  ];
+  if (intent.dateWindow) steps.push({ filters: base, relaxed: ["date"] });
+  if (hasCategory) {
+    steps.push({ filters: { city: intent.city }, relaxed: intent.dateWindow ? ["date", "category"] : ["category"] });
+  }
+  let last: { results: any[]; error?: string; relaxed: Relaxation[] } = { results: [], relaxed: [] };
+  for (const step of steps) {
+    const res = await search(step.filters);
+    if (res.error) return { results: [], error: res.error, relaxed: step.relaxed };
+    last = { results: res.results || [], relaxed: step.relaxed };
+    if (last.results.length > 0) return last;
+  }
+  return { results: [], relaxed: [] };
 }
 
 /**
@@ -366,6 +425,7 @@ export function formatFallbackReply(
   places: PlaceResult[],
   events: EventResult[],
   language: ResponseLanguage,
+  relaxed: Relaxation[] = [],
 ) {
   const seenPlaces = new Set<string>();
   const uniquePlaces = places.filter((place) => {
@@ -425,6 +485,11 @@ export function formatFallbackReply(
         locationMissing: "location not specified",
         cityPrefix: "in",
         selectedFilters: "with the selected filters.",
+        relaxedA: "I found no events matching all your filters",
+        relaxedB: "So I dropped",
+        relaxedC: "and show the events I do have",
+        droppedDate: "the date",
+        droppedCategory: "the category",
       }
     : {
         intro: "Her er resultater direkte fra B-Social:",
@@ -435,7 +500,22 @@ export function formatFallbackReply(
         locationMissing: "sted ikke angivet",
         cityPrefix: "i",
         selectedFilters: "med de valgte filtre.",
+        relaxedA: "Jeg fandt ingen events der matcher alle dine filtre",
+        relaxedB: "Jeg har derfor droppet",
+        relaxedC: "og viser de events jeg har",
+        droppedDate: "datoen",
+        droppedCategory: "kategorien",
       };
+  // Events were found only after loosening the filters: say what was dropped.
+  const asked = [
+    intent.city ? `${copy.cityPrefix} ${intent.city}` : "",
+    intent.dateWindow?.label ?? "",
+    intent.eventCategory && relaxed.includes("category") ? intent.eventCategory : "",
+  ].filter(Boolean).join(", ");
+  const droppedWords = relaxed
+    .map((r) => (r === "date" ? copy.droppedDate : copy.droppedCategory))
+    .join(language === "en" ? " and " : " og ");
+  const relaxedIntro = `${copy.relaxedA} (${asked}). ${copy.relaxedB} ${droppedWords} ${copy.relaxedC}${intent.city ? ` ${copy.cityPrefix} ${intent.city}` : ""}:`;
   const lines = [
     // Show the DERIVED city when there is no real one, marked as approximate.
     // Matching on nearest_city while printing "by ikke angivet" made a place we
@@ -461,7 +541,7 @@ export function formatFallbackReply(
 
   return {
     reply: lines.length > 0
-      ? `${substituting ? `${copy.placesInstead}${intent.city ? ` ${copy.cityPrefix} ${intent.city}` : ""}:` : copy.intro}\n${lines.join("\n")}`
+      ? `${relaxed.length > 0 && selectedEvents.length > 0 ? relaxedIntro : substituting ? `${copy.placesInstead}${intent.city ? ` ${copy.cityPrefix} ${intent.city}` : ""}:` : copy.intro}\n${lines.join("\n")}`
       : `${copy.noResults}${intent.city ? ` ${copy.cityPrefix} ${intent.city}` : ""} ${copy.selectedFilters}`,
     tool_calls_made: ["direct_discovery_fallback"],
     place_ids: selectedPlaces.map((place) => String(place.id)).slice(0, intent.limit),

@@ -46,8 +46,8 @@ import {
 } from "./chat-provider";
 import { rateLimitActorKey } from "./ratelimit";
 import { resolveChatTier } from "./plus-tier";
-import { aiBreakerIsOpen, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
-import type { DiscoveryIntent } from "./discovery-fallback";
+import { aiBreakerIsOpen, searchEventsRelaxing, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
+import type { DiscoveryIntent, Relaxation } from "./discovery-fallback";
 
 export { RateLimitDurableObject } from "./rate-limit-do";
 
@@ -1299,6 +1299,7 @@ async function directDiscoveryFallback(
   let places: any[] = [];
   let events: any[] = [];
   let failed = false;
+  let relaxed: Relaxation[] = [];
 
   if (intent.kind === "places" || intent.kind === "both") {
     // H1 — the SAME gate the /search path uses, which is the point of putting
@@ -1316,12 +1317,8 @@ async function directDiscoveryFallback(
   }
 
   if (intent.kind === "events" || intent.kind === "both") {
-    const useSpecificTag = intent.queryTag && intent.queryTag !== intent.eventCategory;
-    const result = await searchEvents(supabase, {
-      city: intent.city,
-      category: useSpecificTag ? undefined : intent.eventCategory,
-      tags: useSpecificTag ? intent.queryTag : undefined,
-    });
+    const result = await searchEventsRelaxing(intent, (filters) => searchEvents(supabase, filters));
+    relaxed = result.relaxed;
     if (result.error) failed = true;
     events = result.results || [];
   }
@@ -1336,7 +1333,7 @@ async function directDiscoveryFallback(
     });
   }
 
-  return jsonResponse(formatFallbackReply(intent, places, events, language));
+  return jsonResponse(formatFallbackReply(intent, places, events, language, relaxed));
 }
 
 /**
