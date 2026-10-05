@@ -119,3 +119,18 @@ describe("directDiscoveryFallback — weekend filter (audit #2)", () => {
     expect(cph(t)).toContain("Mon");
   });
 });
+
+describe("no-tool-call discovery turn is a good answer, not an outage", () => {
+  it("returns catalogue results without degraded, keeps tool_calls_made for observability", async () => {
+    (queries.searchPlaces as any).mockResolvedValue({ results: [] });
+    (queries.searchEvents as any).mockReset();
+    (queries.searchEvents as any).mockResolvedValue({ results: [DB_EVENT] });
+    const ai = vi.fn().mockResolvedValue({ response: "Her er nogle forslag" });
+    const res = await worker.fetch(chatRequest("jazz i København i weekenden"), baseEnv(ai), executionContext());
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.event_ids).toContain(DB_EVENT.id);
+    expect(body.tool_calls_made).toEqual(["direct_discovery_fallback"]);
+    expect(body.degraded).toBeUndefined();
+  });
+});

@@ -68,7 +68,7 @@ export async function searchEvents(
 
   let query = supabase
     .from("events")
-    .select("id, title, description, location, date, end_date, all_day, status, country, source, url, category, price, price_currency, price_evidence, interest_tags, suitable_for_modes, indoor_outdoor, latitude, longitude")
+    .select("id, title, description, location, date, end_date, all_day, status, country, source, url, category, price, price_currency, price_evidence, interest_tags, suitable_for_modes, indoor_outdoor, latitude, longitude, event_timezone")
     .not("date", "is", null)
     .or("status.eq.active,status.is.null")
     // Known end: include ongoing until (not including) end. Unknown end:
@@ -124,7 +124,7 @@ export async function searchEvents(
       title: e.title,
       description: e.description,
       location: e.location,
-      date: formatDate(e.date, e.all_day, displayTimezone),
+      date: formatDate(e.date, e.all_day, displayTimezone, resolveEventZone(e)),
       date_raw: e.date,
       end_date: e.end_date ?? null,
       all_day: e.all_day ?? null,
@@ -133,8 +133,9 @@ export async function searchEvents(
       source: e.source ?? null,
       url: e.url ?? null,
       // Currency columns require discovery_search_v1 schema gate before release.
-      // Event timezone remains unknown; country is never evidence.
-      timezone: null,
+      // Only a stored, valid event_timezone is reported as the event's zone.
+      // A Danish country default is a display choice, never provenance.
+      timezone: validZone(e.event_timezone),
       currency: explicitCurrency(e.price_currency),
       price_evidence: e.price_evidence ?? null,
       price_amount: e.price ?? null,
@@ -282,7 +283,7 @@ export async function searchPlaces(
 
   const { data, error } = await supabase
     .from("places")
-    .select("id, name, description, city, nearest_city, region, main_categories, tags, smart_tags, rating_avg, metadata")
+    .select("id, name, description, city, nearest_city, region, main_categories, tags, smart_tags, rating_avg, latitude, longitude, metadata")
     .in("id", ids);
 
   if (error) {
@@ -308,6 +309,9 @@ export async function searchPlaces(
       // then dropping it here is why the first attempt changed nothing.
       nearest_city: p.nearest_city,
       region: p.region,
+      // Null stays null: a missing coordinate must never become (0,0).
+      latitude: Number.isFinite(p.latitude) ? p.latitude : null,
+      longitude: Number.isFinite(p.longitude) ? p.longitude : null,
       categories: p.main_categories?.join(", "),
       tags: p.tags?.join(", "),
       rating: p.rating_avg ? `${p.rating_avg}/5` : "Ingen rating endnu",
@@ -318,7 +322,24 @@ export async function searchPlaces(
 
 // UTC is an explicitly labelled display basis, not the event's local timezone.
 // The current schema has no timezone provenance; never silently assign one.
-function formatDate(isoDate: string, allDay = false, displayTimezone = "UTC"): string {
+function validZone(zone: unknown): string | null {
+  if (typeof zone !== "string" || !zone.trim()) return null;
+  try {
+    return new Intl.DateTimeFormat("da-DK", { timeZone: zone.trim() }).resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+}
+
+// Known local zone: the event's own event_timezone, else Copenhagen for Danish
+// events. null keeps the honest UTC label.
+function resolveEventZone(e: { event_timezone?: unknown; country?: unknown }): string | null {
+  const own = validZone(e.event_timezone);
+  if (own) return own;
+  return typeof e.country === "string" && e.country.trim().toUpperCase() === "DK" ? "Europe/Copenhagen" : null;
+}
+
+function formatDate(isoDate: string, allDay = false, displayTimezone = "UTC", knownZone: string | null = null): string {
   try {
     const date = new Date(isoDate);
     if (Number.isNaN(date.getTime())) return isoDate;
@@ -334,9 +355,11 @@ function formatDate(isoDate: string, allDay = false, displayTimezone = "UTC"): s
       month: "long",
       year: "numeric",
       // Do not shift a date-only sentinel into a different calendar day.
-      timeZone: timeUnknown ? "UTC" : displayTimezone,
+      timeZone: timeUnknown ? "UTC" : (knownZone ?? displayTimezone),
       ...(timeUnknown ? {} : { hour: "2-digit", minute: "2-digit" }),
     });
+    // Zone known: plain local time, no disclaimer.
+    if (knownZone) return label;
     return `${label} (${timeUnknown ? "UTC-dato" : displayTimezone}; lokal tidszone ukendt)`;
   } catch {
     return isoDate;
