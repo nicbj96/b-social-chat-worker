@@ -31,10 +31,14 @@ describe('deterministic discovery through actual /chat handler and SDK',()=>{
   response=Response.json({message:'offline'},{status:503});const res=await chat();expect(res.status).toBe(503);
   expect(await res.json()).toMatchObject({retrieval_status:'failed',applied_filters:null});expect(run).not.toHaveBeenCalled();
  });
- it('keeps unsupported regions and invalid cursors explicit without a query/model',async()=>{
-  expect((await chat({...intent,geography:{kind:'region',country:'DK',region:'DK-84'}})).status).toBe(422);
+ it('region intent reaches the exact RPC with region geography (never city/country widening); invalid cursors stay explicit',async()=>{
+  const region={...intent,geography:{kind:'region' as const,country:'DK',region:'DK-84'}};
+  const res=await chat(region);expect(res.status).toBe(200);
+  expect(JSON.parse(calls[0].init.body).p_intent.geography).toEqual({kind:'region',country:'DK',region:'DK-84'});
+  expect(calls[0].url).toContain('/rest/v1/rpc/discovery_search_v1');expect(run).not.toHaveBeenCalled();
+  const before=calls.length;
   expect((await chat(intent,{intentKey:'wrong',token:'abcdef'})).status).toBe(400);
-  expect(calls).toHaveLength(0);expect(run).not.toHaveBeenCalled();
+  expect(calls).toHaveLength(before);expect(run).not.toHaveBeenCalled();
  });
  it('forwards bound next cursor without changing hard filters',async()=>{
   const res=await chat(intent,{intentKey:searchIntentKey(intent),token:'abcdef'});expect(res.status).toBe(200);

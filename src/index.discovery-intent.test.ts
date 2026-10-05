@@ -14,11 +14,10 @@ describe("/chat explicit discovery_intent boundary", () => {
       body: JSON.stringify({messages:[{role:"user",content:"hej"}], discovery_intent:fixture.intent}),
     }), {AI:{run}, SUPABASE_URL:"https://example.test", SUPABASE_KEY:"test"} as any,
     {waitUntil:vi.fn(),passThroughOnException:vi.fn(),props:{}} as any);
-    const region=fixture.intent.geography.kind==='region';
-    expect(response.status).toBe(fixture.valid ? region?422:200 : 400);
+    expect(response.status).toBe(fixture.valid ? 200 : 400);
     const body = await response.json() as any;
-    expect(body.error).toBe(fixture.valid ? region?'unsupported_region_metadata':undefined : 'invalid_discovery_intent');
-    expect(net).toHaveBeenCalledTimes(fixture.valid && !region?1:0);
+    expect(body.error).toBe(fixture.valid ? undefined : 'invalid_discovery_intent');
+    expect(net).toHaveBeenCalledTimes(fixture.valid ?1:0);
     expect(run).not.toHaveBeenCalled();
   });
 });

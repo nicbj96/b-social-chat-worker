@@ -13,7 +13,8 @@ export class DiscoveryError extends Error {
 export async function fetchDiscoveryPage(client:SupabaseClient,input:SearchRequest,signal?:AbortSignal):Promise<DiscoveryPage> {
  let request:SearchRequest;
  try {request=parseSearchRequest(input);} catch {throw new DiscoveryError('invalid_search_intent');}
- if(request.intent.geography.kind==='region') throw new DiscoveryError('unsupported_region_metadata');
+ // Region intents are supported by discovery_search_v1/discovery_map_v1 and
+ // validated against verified region geodata in SQL; no client-side throw.
  const deadline=AbortSignal.timeout(6000);
  const cancellation=signal?AbortSignal.any([signal,deadline]):deadline;
  cancellation.throwIfAborted();
