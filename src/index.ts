@@ -1685,7 +1685,8 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
     // grounded database answer.
     if (aiBreakerIsOpen()) {
       console.error(JSON.stringify({ event: "ai_breaker_open", action: "direct_fallback" }));
-      return await catalogueFallbackForTurn(env, userMessages, ctx);
+      // Breaker open = the provider has been failing: declare it.
+      return await catalogueFallbackForTurn(env, userMessages, ctx, { reason: "provider_error" });
     }
 
     // Global daily neuron ceiling (kill switch): skip every model call and
@@ -2314,7 +2315,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
         // something up. The 503 class this branch fixes (golden-set cases 1/2)
         // is discovery-shaped and keeps directDiscoveryFallback; a chitchat or
         // save turn must not be answered with "Jeg fandt ingen resultater".
-        return await catalogueFallbackForTurn(env, fallbackMessages, fallbackCtx);
+        return await catalogueFallbackForTurn(env, fallbackMessages, fallbackCtx, providerDegradation(err));
       } catch (fallbackErr) {
         console.error("Chat fallback error:", fallbackErr);
       }

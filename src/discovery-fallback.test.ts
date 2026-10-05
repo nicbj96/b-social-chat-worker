@@ -64,7 +64,8 @@ describe("formatFallbackReply", () => {
     expect(response.reply).toContain("Strandby hundeskov — Frederikshavn");
     expect(response.place_ids).toEqual(["p1", "p2"]);
     expect(response.event_ids).toEqual([]);
-    expect(response.degraded).toBe(true);
+    // A good catalogue answer is not an outage: the caller decides on degraded.
+    expect(response.degraded).toBeUndefined();
   });
 
   it("is honest when a scoped search returns nothing", () => {
@@ -638,6 +639,6 @@ describe("audit #4: degraded reply carries ids and coordinates for the map hando
     expect(typeof out.sources[0].retrieved_at).toBe("string");
     // missing coordinates stay null, never (0,0)
     expect(out.sources[1].verified_fields.latitude).toBeNull();
-    expect(out.degraded).toBe(true);
+    expect(out.degraded).toBeUndefined();
   });
 });

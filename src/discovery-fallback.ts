@@ -566,7 +566,9 @@ export function formatFallbackReply(
       source_updated_at: null,
     })),
     suggested_tag_slugs: intent.placeCategory ? [intent.placeCategory] : [],
-    degraded: true,
+    // No `degraded` here: a catalogue answer is a good answer. Callers that
+    // reach it through a real failure (provider error, breaker, deadline, cap)
+    // declare it via catalogueFallbackForTurn's degradation reason.
   };
 }
 
