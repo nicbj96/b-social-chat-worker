@@ -36,6 +36,7 @@ import {
   capReplyBytes,
   capRows,
   classifyProviderFailure,
+  CHAT_TIERS,
   consumeSessionTurnBudget,
   degradationNotice,
   sessionBudgetKey,
@@ -43,6 +44,7 @@ import {
   type DegradationReason,
 } from "./chat-provider";
 import { rateLimitActorKey } from "./ratelimit";
+import { resolveChatTier } from "./plus-tier";
 import { aiBreakerIsOpen, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 import type { DiscoveryIntent } from "./discovery-fallback";
 
@@ -1384,10 +1386,21 @@ function providerDegradation(error: unknown): { reason: DegradationReason; retry
 
 /** Plan §9 M41: the response byte cap applies to EVERY /chat reply path
  *  (tool, no-tool, degraded fallback). An over-cap reply is cut and flagged. */
+// Quota of the turn, set by handleChatInner at the budget charge and read (once)
+// by handleChat so every 200 reply carries { tier, cap, remaining }.
+const chatQuotaByRequest = new WeakMap<Request, { tier: string; cap: number; remaining: number | null }>();
+
 async function handleChat(request: Request, env: Env, executionCtx: ExecutionContext): Promise<Response> {
   const res = await handleChatInner(request, env, executionCtx);
   if (res.status !== 200) return res;
-  const text = await res.text();
+  let text = await res.text();
+  const quota = chatQuotaByRequest.get(request);
+  if (quota) {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) text = JSON.stringify({ ...parsed, quota });
+    } catch { /* not JSON: leave unchanged */ }
+  }
   const rebuilt = (t: string) => new Response(t, { status: res.status, headers: res.headers });
   if (text.length <= RESOURCE_CAPS.response_bytes) return rebuilt(text);
   try {
@@ -1518,19 +1531,22 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
     // missing/broken store fails open (the per-actor rate limiter still
     // applies) and never takes chat down.
     const sessionBudgetKey_ = sessionBudgetKey(userId, await rateLimitActorKey(request, "/chat"));
+    const tier = await resolveChatTier(env, userId);
     const sessionBudget = await consumeSessionTurnBudget(
       env.RATE_LIMITER ? env.RATE_LIMITER.getByName(sessionBudgetKey_) : undefined,
-      sessionBudgetKey_,
+      sessionBudgetKey_, 1, CHAT_TIERS[tier],
     );
     if (!sessionBudget.allowed) {
-      console.error(JSON.stringify({ event: "session_budget_exhausted", persisted: sessionBudget.persisted }));
-      const notice = degradationNotice("session_budget_exhausted", sessionBudget.retryAfterSeconds);
+      console.error(JSON.stringify({ event: "session_budget_exhausted", tier, persisted: sessionBudget.persisted }));
+      const notice = degradationNotice(tier === "plus" ? "plus_fair_use_exhausted" : "session_budget_exhausted", sessionBudget.retryAfterSeconds);
       return jsonResponse(
-        { error: "session_budget_exhausted", retry_after_seconds: sessionBudget.retryAfterSeconds, degraded: true, degradation: notice, notice: notice.notice },
+        { error: "session_budget_exhausted", retry_after_seconds: sessionBudget.retryAfterSeconds, degraded: true, degradation: notice, notice: notice.notice,
+          quota: { tier, cap: sessionBudget.cap, remaining: 0 }, upgrade: tier === "free" ? { href: "/plus" } : undefined },
         429,
         { "Retry-After": String(sessionBudget.retryAfterSeconds) },
       );
     }
+    chatQuotaByRequest.set(request, { tier, cap: sessionBudget.cap, remaining: sessionBudget.remaining });
 
     executionCtx.waitUntil(notifyCommandCenter(env, latestUserMessage(userMessages), body.context || {}));
 

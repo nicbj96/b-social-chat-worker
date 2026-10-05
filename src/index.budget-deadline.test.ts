@@ -107,7 +107,7 @@ function fakeNamespace(sessionBehavior?: { success: boolean; retryAfterSeconds: 
           const used = (counters.get(name) ?? 0) + weight;
           if (used > cap) return { success: false, retryAfterSeconds: 300 };
           counters.set(name, used);
-          return { success: true, retryAfterSeconds: 0 };
+          return { success: true, retryAfterSeconds: 0, remaining: Math.max(0, cap - used) };
         },
         peek: async () => ({ success: true, retryAfterSeconds: 1 }),
       };
@@ -130,7 +130,7 @@ describe("budget/deadline — session budget ledger", () => {
     const body = await response.json() as any;
     expect(body.error).toBe("session_budget_exhausted");
     // Danish, actionable message:
-    expect(body.notice).toContain("dagens chat-kvota");
+    expect(body.notice).toContain("5 gratis AI-søgninger");
     expect(aiRun).not.toHaveBeenCalled();
   });
 
@@ -210,6 +210,20 @@ function authFetchMock() {
       const auth = String(init?.headers?.Authorization ?? init?.headers?.authorization ?? "");
       const id = auth.replace("Bearer ", "");
       return new Response(JSON.stringify({ id }), { status: 200 });
+    }
+    return new Response("{}", { status: 200 });
+  });
+}
+function plusAwareFetchMock(plusUsers: string[]) {
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input: any, init: any) => {
+    const url = String(input);
+    if (url.includes("/auth/v1/user")) {
+      const id = String(init?.headers?.Authorization ?? "").replace("Bearer ", "");
+      return new Response(JSON.stringify({ id }), { status: 200 });
+    }
+    if (url.includes("plus_subscriptions")) {
+      const isPlus = plusUsers.some((u) => url.includes(`user_id=eq.${u}`));
+      return new Response(JSON.stringify(isPlus ? [{ current_period_end: null }] : []), { status: 200 });
     }
     return new Response("{}", { status: 200 });
   });
@@ -374,5 +388,55 @@ describe("budget/deadline — account-key isolation at /chat level (name-respect
     const response = await worker.fetch!(chatRequest("godmorgen"), baseEnv(aiRun, { RATE_LIMITER: namespace }), executionContext());
     expect(response.status).toBe(200);
     expect(aiRun).toHaveBeenCalled();
+  });
+});
+
+describe("budget/deadline — tiered quota (free 5 / plus 200)", () => {
+  it("free: 5 × 200 with quota.remaining 4..0, then 429 with upgrade /plus and remaining 0", async () => {
+    const fetchSpy = plusAwareFetchMock([]);
+    const { namespace } = fakeNamespace();
+    const aiRun = vi.fn().mockResolvedValue({ response: "Hej!" });
+    const env = baseEnv(aiRun, { RATE_LIMITER: namespace });
+    const remaining: unknown[] = [];
+    for (let i = 0; i < 5; i++) {
+      const r = await worker.fetch!(authedChat("user-f"), env, executionContext());
+      expect(r.status).toBe(200);
+      const b = await r.json() as any;
+      expect(b.quota.tier).toBe("free");
+      expect(b.quota.cap).toBe(5);
+      remaining.push(b.quota.remaining);
+    }
+    const r6 = await worker.fetch!(authedChat("user-f"), env, executionContext());
+    fetchSpy.mockRestore();
+    expect(remaining).toEqual([4, 3, 2, 1, 0]);
+    expect(r6.status).toBe(429);
+    const b6 = await r6.json() as any;
+    expect(b6.upgrade.href).toBe("/plus");
+    expect(b6.quota.remaining).toBe(0);
+  });
+
+  it("plus: turn 6 is 200", async () => {
+    const fetchSpy = plusAwareFetchMock(["user-p"]);
+    const { namespace } = fakeNamespace();
+    const aiRun = vi.fn().mockResolvedValue({ response: "Hej!" });
+    const env = baseEnv(aiRun, { RATE_LIMITER: namespace });
+    let last: Response | undefined;
+    for (let i = 0; i < 6; i++) last = await worker.fetch!(authedChat("user-p"), env, executionContext());
+    fetchSpy.mockRestore();
+    expect(last!.status).toBe(200);
+    expect(((await last!.json()) as any).quota).toMatchObject({ tier: "plus", cap: 200 });
+  });
+
+  it("plus at 200: plus_fair_use_exhausted and no upgrade", async () => {
+    const fetchSpy = plusAwareFetchMock(["user-p"]);
+    const { namespace } = fakeNamespace(undefined, { preset: { "session-chat-budget:v2:account:user-p": 200 } });
+    const aiRun = vi.fn().mockResolvedValue({ response: "Hej!" });
+    const r = await worker.fetch!(authedChat("user-p"), baseEnv(aiRun, { RATE_LIMITER: namespace }), executionContext());
+    fetchSpy.mockRestore();
+    expect(r.status).toBe(429);
+    const b = await r.json() as any;
+    expect(b.degradation.reason).toBe("plus_fair_use_exhausted");
+    expect(b.upgrade).toBeUndefined();
+    expect(b.notice).toContain("fair-use");
   });
 });
