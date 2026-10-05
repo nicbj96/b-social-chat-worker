@@ -23,6 +23,9 @@ import { guardedFetch } from "./fetchguard";
 import { fetchWeather, haversineKm, estimateTravelMinutes, normalizeMode, isValidLatLng } from "./context-tools";
 import { enforceRateLimit, enforceAiDailyBudget, chargeAiDailyBudget, type RateLimitEnv } from "./ratelimit";
 import { runAiCounted, aiCostSnapshot, setAiUsageReporter } from "./aiCost";
+import { proposeIntentChange, type IntentProposal } from "./chat-intent-proposal";
+import { buildGroundedSources, groundModelReply, type GroundedToolResult } from "./grounded-answer";
+import { TurnBudget, TurnBudgetExceeded } from "./chat-budget";
 import { aiBreakerIsOpen, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 import type { DiscoveryIntent } from "./discovery-fallback";
 
@@ -1368,6 +1371,8 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
         last_session?: string;
         search_query?: string;
       };
+      /** The widget's validated current search intent for proposal turns. */
+      current_intent?: unknown;
     };
     try {
       // Measure the body we ACTUALLY received, not the one the caller claimed.
@@ -1567,7 +1572,9 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
 
     // First AI call — may include tool calls
     let aiResponse: any;
+    const budget = new TurnBudget();
     try {
+      budget.reserveModel();
       aiResponse = await runAiCounted(env.AI, "@cf/meta/llama-4-scout-17b-16e-instruct", {
         messages,
         tools: TOOLS,
@@ -1602,6 +1609,9 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
             const collectedEventIds: string[] = [];
             const collectedPlaces: { id?: string; name?: string; city?: string }[] = [];
             const collectedEvents: { id?: string; title?: string; location?: string; date?: string }[] = [];
+            const groundedToolResults: GroundedToolResult[] = [];
+            let turnIntentProposal: IntentProposal | undefined;
+            const toolResultErrors: string[] = [];
 
             for (const toolCall of aiResponse.tool_calls) {
               const fnName = toolCall.function.name;
@@ -1647,12 +1657,17 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                       // search it never made as one that found nothing.
                       let vec: number[] | undefined;
                       try {
+                        // Plan §9 P188: at most ONE embedding call per turn; a
+                        // second one is refused by name and reported as an
+                        // error, never replaced by a fake answer.
+                        budget.reserveEmbedding();
                         const emb: any = await runAiCounted(env.AI, "@cf/baai/bge-m3", { text: [fnArgs.query] });
                         vec = emb?.data?.[0];
                       } catch (err) {
-                        console.error("Events embedding failed:", err);
+                        if (err instanceof TurnBudgetExceeded) out.events_error = "budget_exhausted_embedding_calls";
+                        else { console.error("Events embedding failed:", err); }
                       }
-                      if (!vec) out.events_error = "embedding_failed";
+                      if (!vec && !out.events_error) out.events_error = "embedding_failed";
                       if (vec) {
                         const sbHeaders = { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}`, "Content-Type": "application/json" };
                         out.events = await rpcResultRows(`${env.SUPABASE_URL}/rest/v1/rpc/match_events`, sbHeaders, {
@@ -1668,6 +1683,9 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                         collectedEventIds.push(e.id);
                         collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date });
                       });
+                      if ((out.events || []).length > 0 && !out.events_error) {
+                        groundedToolResults.push({ kind: "event", retrieved_at: new Date().toISOString(), rows: out.events });
+                      }
                     }
                     if (kind === "places" || kind === "both") {
                       const placeQuery = String(fnArgs.query ?? "").trim();
@@ -1701,6 +1719,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                       collectedEventIds.push(e.id);
                       collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date });
                     });
+                    if (result.results.length > 0) groundedToolResults.push({ kind: "event", retrieved_at: new Date().toISOString(), rows: result.results });
                   }
                   break;
                 case "search_routes":
@@ -1724,6 +1743,22 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                       collectedPlaceIds.push(p.id);
                       collectedPlaces.push({ id: p.id, name: p.name, city: p.city });
                     });
+                    if (result.results.length > 0) groundedToolResults.push({ kind: "place", retrieved_at: new Date().toISOString(), rows: result.results });
+                  }
+                  break;
+                }
+
+                case "propose_discovery_intent": {
+                  // Plan §6 P163–166 / M38: the model only PROPOSES; the change
+                  // is validated here against the shared contract and an
+                  // invalid or unknown field is reported back verbatim, never
+                  // guessed into a contract value.
+                  const proposal = proposeIntentChange(body.current_intent, fnArgs.change);
+                  if (proposal.accepted) {
+                    turnIntentProposal = proposal.proposal;
+                    result = { proposal_ok: true, proposal_id: proposal.proposal.proposalId, changes: proposal.proposal.changes };
+                  } else {
+                    result = { proposal_ok: false, reason: proposal.reason, ...(proposal.invalid_fields ? { invalid_fields: proposal.invalid_fields } : {}) };
                   }
                   break;
                 }
@@ -1955,6 +1990,11 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
             result = { error: `Ukendt funktion: ${fnName}` };
         }
 
+        // Retrieval/tool failures travel to the grounding layer by name: they
+        // must be reported as errors, never reinterpreted as empty results.
+        for (const code of [result?.events_error, result?.places_error]) {
+          if (typeof code === "string" && !toolResultErrors.includes(code)) toolResultErrors.push(code);
+        }
         // Add tool result to conversation
         messages.push({
           role: "tool",
@@ -1966,6 +2006,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       // Second AI call — now with data from Supabase
       let finalResponse: any;
       try {
+        budget.reserveModel();
         finalResponse = await runAiCounted(env.AI, "@cf/meta/llama-4-scout-17b-16e-instruct", {
           messages,
         });
@@ -1996,17 +2037,38 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
         }
       }
 
+      // Plan §7 P168–174 / M39: the model's reply is grounded against the
+      // evidence the deterministic tool path retrieved. Contradictory or
+      // invented facts are removed and re-rendered from verified fields; a
+      // failed retrieval surfaces as an explicit error, never as a null or a
+      // faked "no results". Evidence without any rows plus a named error is a
+      // failed retrieval; evidence without rows and no error is genuinely empty.
+      const groundedSources = buildGroundedSources(groundedToolResults);
+      const namedError = groundedToolResults.length === 0
+        ? toolResultErrors.find(code =>
+            ["budget_exhausted_embedding_calls", "embedding_failed", "rpc_failed", "rpc_unreachable"].includes(code)) ?? null
+        : null;
+      const repaired = repairContradictoryGroundedReply(
+        finalResponse.response || finalResponse.content || "",
+        collectedPlaces,
+        collectedEvents,
+        inferResponseLanguage(userMessages.map((m) => m.content).join(" ")),
+      );
+      const grounded = groundModelReply(repaired, groundedSources, {
+        lang: inferResponseLanguage(userMessages.map((m) => m.content).join(" ")) === "en" ? "en" : "da",
+        retrievalError: namedError ?? null,
+      });
+
       return jsonResponse({
-              reply: repairContradictoryGroundedReply(
-                finalResponse.response || finalResponse.content || "",
-                collectedPlaces,
-                collectedEvents,
-                inferResponseLanguage(userMessages.map((m) => m.content).join(" ")),
-              ),
+              reply: grounded.reply,
+              grounding: grounded.grounding,
+              corrections: grounded.corrections,
+              intent_proposal: turnIntentProposal,
               tool_calls_made: aiResponse.tool_calls.map((tc: any) => tc.function.name),
               place_ids: collectedPlaceIds,
               event_ids: collectedEventIds,
               suggested_tag_slugs: [...new Set(collectedTagSlugs)],
+              budget: budget.snapshot(),
             });
           }
 

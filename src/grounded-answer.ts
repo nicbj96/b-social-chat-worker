@@ -1,0 +1,180 @@
+/** Plan §7 P168–174 / M39: grounding for the NORMAL model path.
+ * The model's free text may only frame the answer; every concrete fact
+ * (entity, price, currency, time, status) must come from structured evidence
+ * captured with the deterministic retrieval's eligibility. Wrong or
+ * contradictory model claims are removed and the facts are re-rendered from
+ * verified fields; a failed retrieval is an explicit error, never a null or a
+ * fake "no results". retrieved_at (when WE retrieved) is kept distinct from
+ * the upstream source update time.
+ */
+
+export interface GroundedSource {
+  id: string;
+  kind: "event" | "place";
+  url: string;
+  verified_fields: Record<string, unknown>;
+  retrieved_at: string;
+  source_updated_at: string | null;
+}
+
+export type Grounding = "verified" | "corrected" | "flagged" | "error";
+export interface GroundedAnswer { reply: string; grounding: Grounding; corrections: string[] }
+
+export interface GroundedToolResult { kind: "event" | "place"; retrieved_at: string; rows: Record<string, unknown>[] }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export function buildGroundedSources(results: GroundedToolResult[]): GroundedSource[] {
+  const out: GroundedSource[] = [];
+  for (const result of results) {
+    for (const row of result.rows) {
+      const id = typeof row.id === "string" && UUID.test(row.id) ? row.id : null;
+      const title = typeof row.title === "string" ? row.title : typeof row.name === "string" ? row.name : null;
+      if (!id || !title) continue;
+      const upstream = row.source_updated_at ?? row.catalog_updated_at ?? row.updated_at ?? null;
+      out.push({
+        id, kind: result.kind, url: `/${result.kind === "event" ? "event" : "sted"}/${id}`,
+        verified_fields: { ...row, id, [result.kind === "event" ? "title" : "name"]: title },
+        retrieved_at: result.retrieved_at,
+        source_updated_at: typeof upstream === "string" && Number.isFinite(Date.parse(upstream)) ? upstream : null,
+      });
+    }
+  }
+  return out;
+}
+
+function priceLabel(fields: Record<string, unknown>, lang: "da" | "en"): string {
+  const price = fields.price;
+  if (typeof price !== "number" || !Number.isFinite(price) || price < 0) return lang === "da" ? "Pris ukendt" : "Price unknown";
+  if (price === 0) return lang === "da" ? "Gratis" : "Free";
+  const currency = typeof fields.price_currency === "string" && /^[A-Z]{3}$/.test(fields.price_currency)
+    ? fields.price_currency : lang === "da" ? "(valuta ukendt)" : "(currency unknown)";
+  return `${price} ${currency}`;
+}
+
+export function renderGroundedFacts(sources: GroundedSource[], lang: "da" | "en"): string[] {
+  const lines = sources.map(s => {
+    const title = String(s.verified_fields[s.kind === "event" ? "title" : "name"]);
+    const label = `${title} — ${priceLabel(s.verified_fields, lang)}`;
+    const d = s.verified_fields.date;
+    const timeLine = typeof d === "string" && Number.isFinite(Date.parse(d))
+      ? (() => {
+          const dt = new Date(d);
+          const hh = String(dt.getUTCHours()).padStart(2, "0"), mm = String(dt.getUTCMinutes()).padStart(2, "0");
+          const stamp = `${dt.toISOString().slice(0, 10)} ${hh}:${mm}`;
+          return lang === "da" ? `Tidspunkt: ${stamp} UTC` : `Time: ${stamp} UTC`;
+        })()
+      : null;
+    return timeLine ? `${label}\n${timeLine}` : label;
+  });
+  for (const s of sources) {
+    if (lang === "da") {
+      lines.push(`Hentet: ${s.retrieved_at}`);
+      lines.push(s.source_updated_at ? `Kilde opdateret: ${s.source_updated_at}` : "Kildens opdateringstid er ukendt");
+    } else {
+      lines.push(`Retrieved: ${s.retrieved_at}`);
+      lines.push(s.source_updated_at ? `Source updated: ${s.source_updated_at}` : "Source update time unknown");
+    }
+  }
+  return lines;
+}
+
+const TITLE_RE = /"([^"]{1,120})"/g;
+const PRICE_RE = /(\d+(?:[.,]\d+)?)\s*(kr\.?|dkk|eur|usd|sek|nok|gbp|chf|euro(?:r|s)?|kroner)/i;
+const GRATIS_RE = /\b(gratis|free(?: of charge)?|no charge|free entry)\b/i;
+const CLOCK_RE = /\b(?:klokken|kl\.?|at)\s*(\d{1,2})[:.](\d{2})\b/i;
+const DATE_RE = /\b(\d{1,2})\.\s*(januar|februar|marts|april|maj|juni|juli|august|september|oktober|november|december)\b|\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})\b/i;
+const MONTHS_DA = { januar: 1, februar: 2, marts: 3, april: 4, maj: 5, juni: 6, juli: 7, august: 8, september: 9, oktober: 10, november: 11, december: 12 } as Record<string, number>;
+const MONTHS_EN = { january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12 } as Record<string, number>;
+
+function evidencePriceNumbers(sources: GroundedSource[]): number[] {
+  return sources.map(s => (typeof s.verified_fields.price === "number" && Number.isFinite(s.verified_fields.price) ? s.verified_fields.price : NaN)).filter(n => !Number.isNaN(n));
+}
+function evidenceFree(sources: GroundedSource[]): boolean { return sources.some(s => s.verified_fields.price === 0); }
+function evidenceTitleList(sources: GroundedSource[]): string[] { return sources.map(s => String(s.verified_fields[s.kind === "event" ? "title" : "name"]).toLowerCase()); }
+function evidenceClockMinutes(sources: GroundedSource[]): number[] {
+  return sources.flatMap(s => {
+    const d = s.verified_fields.date;
+    if (typeof d !== "string" || !Number.isFinite(Date.parse(d))) return [];
+    const dt = new Date(d);
+    return [dt.getUTCHours() * 60 + dt.getUTCMinutes()];
+  });
+}
+function evidenceDayMonth(source: GroundedSource | undefined): { day: number; month: number } | null {
+  if (!source) return null;
+  const d = source.verified_fields?.date;
+  if (typeof d !== "string" || !Number.isFinite(Date.parse(d))) return null;
+  const dt = new Date(d);
+  return { day: dt.getUTCDate(), month: dt.getUTCMonth() + 1 };
+}
+
+function sentenceViolates(sentence: string, sources: GroundedSource[], lang: "da" | "en"): string | null {
+  const titles = evidenceTitleList(sources);
+  for (const m of sentence.matchAll(TITLE_RE)) {
+    if (!titles.includes(m[1].toLowerCase())) return "invented_entity";
+  }
+  const price = sentence.match(PRICE_RE);
+  if (price) {
+    const number = Number(price[1].replace(",", "."));
+    const typed = /dkk|eur|usd|sek|nok|gbp|chf|kr/i.test(price[2]);
+    const evidence = evidencePriceNumbers(sources);
+    const match = evidence.some(n => Math.abs(n - number) < 1e-9) && typed;
+    if (!match) return "price_without_verified_field";
+  } else {
+    // A bare number introduced as a price ("koster 25", "price 25") carries no
+    // currency and is never a verified fact.
+    const bare = sentence.match(/\b(?:koster|pris|price|costs)\s*(\d+(?:[.,]\d+)?)/i);
+    if (bare) return "price_without_verified_field";
+  }
+  if (GRATIS_RE.test(sentence) && !evidenceFree(sources)) return "unverified_free_claim";
+  const clock = sentence.match(CLOCK_RE);
+  if (clock) {
+    const minutes = Number(clock[1]) * 60 + Number(clock[2]);
+    const evidence = evidenceClockMinutes(sources);
+    if (!evidence.some(e => e === minutes)) return "contradictory_time";
+  }
+  const dateClaim = sentence.match(DATE_RE);
+  if (dateClaim) {
+    const day = dateClaim[1] ? Number(dateClaim[1]) : Number(dateClaim[4]);
+    const monthName = (dateClaim[2] ?? dateClaim[3] ?? "").toLowerCase();
+    const month = MONTHS_DA[monthName] ?? MONTHS_EN[monthName];
+    const ev = sources[0] ? evidenceDayMonth(sources[0]) : null;
+    if (ev && (ev.day !== day || ev.month !== month)) return "contradictory_date";
+  }
+  return null;
+}
+
+export function groundModelReply(
+  modelText: string,
+  sources: GroundedSource[],
+  opts: { lang: "da" | "en"; retrievalError?: string | null },
+): GroundedAnswer {
+  const da = opts.lang !== "en";
+  if (opts.retrievalError) {
+    return {
+      reply: da
+        ? `Resultaterne kunne ikke hentes (${opts.retrievalError}). Katalogsøgningen under Udforsk virker stadig.`
+        : `Could not retrieve results (${opts.retrievalError}). The catalogue search under Explore still works.`,
+      grounding: "error",
+      corrections: [],
+    };
+  }
+  if (!modelText.trim()) {
+    return { reply: sources.length ? renderGroundedFacts(sources, da ? "da" : "en").join("\n") : "", grounding: sources.length ? "verified" : "flagged", corrections: [] };
+  }
+  const sentences = modelText.split(/(?<=[.!?])\s+/);
+  const kept: string[] = [];
+  const corrections: string[] = [];
+  for (const sentence of sentences) {
+    const violation = sentenceViolates(sentence, sources, da ? "da" : "en");
+    if (!violation) kept.push(sentence);
+    else if (!corrections.some(c => c.startsWith(violation))) {
+      corrections.push(violation === "invented_entity"
+        ? (da ? "Opdigtede resultater er fjernet; kun verificerede katalogsvar vises." : "Invented results were removed; only verified catalogue answers are shown.")
+        : da ? `Modstridende oplysning er korrigeret fra verificerede felter (${violation}).` : `Contradicting information was corrected from verified fields (${violation}).`);
+    }
+  }
+  if (corrections.length === 0) return { reply: modelText, grounding: "verified", corrections };
+  const facts = renderGroundedFacts(sources, da ? "da" : "en");
+  return { reply: [...kept, ...facts].filter(Boolean).join("\n"), grounding: "corrected", corrections };
+}

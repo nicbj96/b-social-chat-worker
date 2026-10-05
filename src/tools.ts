@@ -308,6 +308,24 @@ export const TOOLS = [
       },
     },
   },
+  {
+    type: "function" as const,
+    function: {
+      name: "propose_discovery_intent",
+      description:
+        "Foreslå en ÆNDRING af brugerens nuværende søgeintent (query, type event/place/both, dato, pris med ISO-valuta, tags, geografi). Kald dette når brugeren beder om en ændring af søgningen ('vis steder i stedet for events', 'kun under 200 kr', 'næste weekend'). Du SKAL sende den fulde ændring i kontraktværdier — ugyldige værdier afvises og gættes ikke: kind er kun 'event'/'place'/'both', valuta kun ISO-kode (DKK/EUR/...), datoer ISO-instants i Z, tags kun slug-arrays. returnerer en valideret proposal brugeren kan Anvende.",
+      parameters: {
+        type: "object",
+        properties: {
+          change: {
+            type: "object",
+            description: "Kun felter der ændres: {query?, kind?, date?, price?, tags?, geography?, sort?}. Kind kun event/place/both; valuta kun 3-bogstavs ISO-kode; date er {from,to,timezone}-instants; tags er {selected:[slugs]}; geografi er den fulde kontraktform (world/country/region/radius).",
+          },
+        },
+        required: ["change"],
+      },
+    },
+  },
 ];
 
 export type ToolCallArgs = {
