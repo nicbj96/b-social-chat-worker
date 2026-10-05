@@ -440,3 +440,34 @@ describe("budget/deadline — tiered quota (free 5 / plus 200)", () => {
     expect(b.notice).toContain("fair-use");
   });
 });
+
+describe("budget/deadline — global daily neuron ceiling (C5)", () => {
+  function ceilingNamespace(spent: boolean, down = false) {
+    const names: string[] = [];
+    return { names, namespace: { getByName: (name: string) => { names.push(name); return {
+      consume: async () => ({ success: true, retryAfterSeconds: 0, remaining: 4 }),
+      peek: async () => {
+        if (name === "ai-neurons:v1:global") { if (down) throw new Error("DO down"); return { success: !spent, retryAfterSeconds: 900 }; }
+        return { success: true, retryAfterSeconds: 1 };
+      },
+    }; } } };
+  }
+  it("ceiling reached: 200 with provider_429 degradation, model never called (deterministic fallback)", async () => {
+    const { namespace, names } = ceilingNamespace(true);
+    const aiRun = vi.fn().mockResolvedValue({ response: "SKAL IKKE KALDES" });
+    const r = await worker.fetch!(chatRequest("jazz i Aarhus?"), baseEnv(aiRun, { RATE_LIMITER: namespace }), executionContext());
+    expect(r.status).toBe(200);
+    const b = await r.json() as any;
+    expect(b.degradation.reason).toBe("provider_429");
+    expect(aiRun).not.toHaveBeenCalled();
+    expect(names).toContain("ai-neurons:v1:global");
+    expect(JSON.stringify(b)).not.toContain("SKAL IKKE KALDES");
+  });
+  it("store down: fails OPEN, model is called", async () => {
+    const { namespace } = ceilingNamespace(false, true);
+    const aiRun = vi.fn().mockResolvedValue({ response: "Hej!" });
+    const r = await worker.fetch!(chatRequest("godmorgen"), baseEnv(aiRun, { RATE_LIMITER: namespace }), executionContext());
+    expect(r.status).toBe(200);
+    expect(aiRun).toHaveBeenCalled();
+  });
+});

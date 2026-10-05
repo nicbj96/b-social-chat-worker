@@ -22,7 +22,7 @@ import { isSafeEntityId, isValidUuid, clampString, clampNumber } from "./validat
 import { executeSecureAddNote, buildTelemetryEvent } from "./secure-actions";
 import { guardedFetch } from "./fetchguard";
 import { fetchWeather, haversineKm, estimateTravelMinutes, normalizeMode, isValidLatLng } from "./context-tools";
-import { enforceRateLimit, enforceAiDailyBudget, chargeAiDailyBudget, type RateLimitEnv } from "./ratelimit";
+import { enforceRateLimit, enforceAiDailyBudget, aiCeilingReached, chargeAiDailyBudget, type RateLimitEnv } from "./ratelimit";
 import { runAiCounted, aiCostSnapshot, setAiUsageReporter } from "./aiCost";
 import { proposeIntentChange, type IntentProposal } from "./chat-intent-proposal";
 import { buildGroundedSources, groundModelReply, type GroundedToolResult } from "./grounded-answer";
@@ -1679,6 +1679,14 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
     if (aiBreakerIsOpen()) {
       console.error(JSON.stringify({ event: "ai_breaker_open", action: "direct_fallback" }));
       return await catalogueFallbackForTurn(env, userMessages, ctx);
+    }
+
+    // Global daily neuron ceiling (kill switch): skip every model call and
+    // answer from the catalogue, declared as provider_429. Fail-open.
+    const ceiling = await aiCeilingReached(env);
+    if (ceiling.reached) {
+      console.error(JSON.stringify({ event: "ai_daily_ceiling_reached", action: "direct_fallback" }));
+      return await catalogueFallbackForTurn(env, userMessages, ctx, { reason: "provider_429", retryAfterSeconds: ceiling.retryAfterSeconds ?? 60 });
     }
 
     // First AI call — may include tool calls
