@@ -1369,7 +1369,22 @@ function providerDegradation(error: unknown): { reason: DegradationReason; retry
   return reason === "provider_429" ? { reason, retryAfterSeconds: 60 } : { reason };
 }
 
+/** Plan §9 M41: the response byte cap applies to EVERY /chat reply path
+ *  (tool, no-tool, degraded fallback). An over-cap reply is cut and flagged. */
 async function handleChat(request: Request, env: Env, executionCtx: ExecutionContext): Promise<Response> {
+  const res = await handleChatInner(request, env, executionCtx);
+  if (res.status !== 200) return res;
+  const text = await res.text();
+  const rebuilt = (t: string) => new Response(t, { status: res.status, headers: res.headers });
+  if (text.length <= RESOURCE_CAPS.response_bytes) return rebuilt(text);
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed.reply === "string") return rebuilt(JSON.stringify(capReplyBytes(parsed).payload));
+  } catch { /* not JSON: fall through unchanged */ }
+  return rebuilt(text);
+}
+
+async function handleChatInner(request: Request, env: Env, executionCtx: ExecutionContext): Promise<Response> {
   // Kept in the outer scope so the catch below can still answer a discovery
   // question after the model path has failed (see the catch for why).
   let fallbackMessages: ChatMessage[] | null = null;
@@ -1667,6 +1682,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
     // A turn that hit the wall clock mid-tools gets an HONEST PARTIAL answer:
     // only what the tools actually retrieved, with the deadline declared.
     let deadlineHitMidTools = false;
+    let rowsCapped = false;
 
     // If the model wants to call tools, execute them
     if (aiResponse.tool_calls && aiResponse.tool_calls.length > 0) {
@@ -1712,6 +1728,17 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                 continue;
               }
 
+              const rowCapFlag = { hit: false };
+              const capToolRows = <T,>(rows: T[] | undefined): T[] => {
+                const c = capRows(rows || []);
+                if (c.capped) { rowsCapped = true; rowCapFlag.hit = true; }
+                return c.rows;
+              };
+              // Plan §9 P188: EVERY tool (places/routes/RPC/writes/events) runs
+              // under the same wall clock. A hanging tool stops the turn at the
+              // deadline instead of spending it unboundedly.
+              try {
+              await deadline.race((async () => {
               switch (fnName) {
                 case "semantic_search": {
                   // EVENTS: embedding -> match_events, as before.
@@ -1774,9 +1801,8 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                         }, () => { out.events_error = "rpc_failed"; });
                         // M41 row cap: the model is never handed more than one
                         // page; a cap is flagged, not hidden.
-                        const capped = capRows(out.events || []);
-                        out.events = capped.rows;
-                        if (capped.capped) out.rows_capped = RESOURCE_CAPS.rows;
+                        out.events = capToolRows(out.events);
+                        if (rowCapFlag.hit) out.rows_capped = RESOURCE_CAPS.rows;
                       }
                       (out.events || []).forEach((e: any) => {
                         if (!e?.id) return;
@@ -1795,7 +1821,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                       const placeOutcome: SearchOutcome = placeQuery || fnArgs.city
                         ? await searchPlacesForQuery(env, placeQuery, 8, fnArgs.city)
                         : { results: [], skipped: "no_query_or_city" };
-                      out.places = placeOutcome.results;
+                      out.places = capToolRows(placeOutcome.results);
                       // H1/M3 — the model is told WHY the place half is empty
                       // ("no_place_intent", "no_city_or_category") or that it
                       // FAILED, so it cannot narrate a top-8 it never received.
@@ -1814,6 +1840,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                 case "search_events":
                   result = await searchEvents(supabase, fnArgs);
                   if (result.results) {
+                    result.results = capToolRows(result.results);
                     result.results.forEach((e: any) => {
                       if (!e?.id) return;
                       collectedEventIds.push(e.id);
@@ -1824,6 +1851,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                   break;
                 case "search_routes":
                   result = await searchRoutes(supabase, fnArgs);
+                  if (result?.results) result.results = capToolRows(result.results);
                   break;
                 case "search_places": {
                   // H1 — this tool filters on city, category and tags, and
@@ -1838,6 +1866,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                   }
                   result = await searchPlaces(supabase, fnArgs);
                   if (result.results) {
+                    result.results = capToolRows(result.results);
                     result.results.forEach((p: any) => {
                       if (!p?.id) return;
                       collectedPlaceIds.push(p.id);
@@ -2067,6 +2096,16 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
           default:
             result = { error: `Ukendt funktion: ${fnName}` };
         }
+              })());
+              } catch (toolErr) {
+                if (toolErr instanceof TurnDeadlineExceeded) {
+                  console.error(JSON.stringify({ event: "turn_deadline_exceeded", phase: "tool_call", tool: fnName }));
+                  deadlineHitMidTools = true;
+                  toolResultErrors.push("turn_deadline_exceeded");
+                  break;
+                }
+                throw toolErr;
+              }
 
         // Retrieval/tool failures travel to the grounding layer by name: they
         // must be reported as errors, never reinterpreted as empty results.
@@ -2179,6 +2218,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
               event_ids: collectedEventIds,
               suggested_tag_slugs: [...new Set(collectedTagSlugs)],
               partial: deadlineHitMidTools || undefined,
+              ...(rowsCapped ? { rows_capped: RESOURCE_CAPS.rows } : {}),
               ...(deadlineDegradation ? { degraded: true, degradation: deadlineDegradation } : {}),
               budget: budget.snapshot(),
             });

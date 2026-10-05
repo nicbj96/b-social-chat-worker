@@ -8,7 +8,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 vi.mock("cloudflare:workers", () => ({ DurableObject: class {} }));
 
 const { DB_EVENT } = vi.hoisted(() => ({
-  DB_EVENT: { id: "evt-bd-1", title: "Jazz i Aarhus", location: "Musikhuset", date: "2026-10-10" },
+  DB_EVENT: { id: "00000000-0000-4000-8000-0000000000b1", title: "Jazz i Aarhus", location: "Musikhuset", date: "2026-10-10" },
 }));
 
 vi.mock("./supabase-queries", async (importOriginal) => ({
@@ -19,6 +19,7 @@ vi.mock("./supabase-queries", async (importOriginal) => ({
   searchRoutes: vi.fn(async () => ({ results: [] })),
 }));
 
+import * as queries from "./supabase-queries";
 import worker from "./index";
 import { __resetAiBreaker } from "./discovery-fallback";
 import { __resetAiCost } from "./aiCost";
@@ -87,19 +88,38 @@ describe("budget/deadline — deadline during a tool call", () => {
   });
 });
 
+// The fake DO namespace RESPECTS the name: every name owns its own counter,
+// exactly like the real RateLimitDurableObject. `preset` seeds named
+// counters; `failFor` makes the store throw for names matching a prefix.
+function fakeNamespace(sessionBehavior?: { success: boolean; retryAfterSeconds: number }, opts: { preset?: Record<string, number>; failFor?: string } = {}) {
+  const counters = new Map<string, number>(Object.entries(opts.preset ?? {}));
+  const names: string[] = [];
+  const consume = vi.fn(async (_cap: number, _window: number, _weight?: number) => ({ success: true, retryAfterSeconds: 0 }));
+  const namespace = {
+    getByName: (name: string) => {
+      names.push(name);
+      const isSession = name.startsWith("session-chat-budget:");
+      return {
+        consume: async (cap: number, window: number, weight = 1) => {
+          consume(cap, window, weight);
+          if (opts.failFor && name.startsWith(opts.failFor)) throw new Error("DO unavailable");
+          if (isSession && sessionBehavior) return sessionBehavior;
+          const used = (counters.get(name) ?? 0) + weight;
+          if (used > cap) return { success: false, retryAfterSeconds: 300 };
+          counters.set(name, used);
+          return { success: true, retryAfterSeconds: 0 };
+        },
+        peek: async () => ({ success: true, retryAfterSeconds: 1 }),
+      };
+    },
+  };
+  return { consume, namespace, counters, names };
+}
+
 describe("budget/deadline — session budget ledger", () => {
   // The worker reuses one DO namespace for the per-actor rate limiter, the
   // global daily budget and the session ledger — each under its own key name.
   // The fake namespace routes by name so only the session ledger is scripted.
-  function fakeNamespace(sessionBehavior: { success: boolean; retryAfterSeconds: number }) {
-    const consume = vi.fn(async (_cap: number, _window: number, _weight?: number) =>
-      _cap === 8_640_000 || _cap === 30 || _cap === 40_000
-        ? { success: true, retryAfterSeconds: 0 }
-        : sessionBehavior,
-    );
-    return { consume, namespace: { getByName: () => ({ consume, peek: async () => ({ success: true, retryAfterSeconds: 1 }) }) } };
-  }
-
   it("a turn past the per-account cap is a named exhaustion: 429 + Retry-After + Danish message, model never called", async () => {
     const { consume, namespace } = fakeNamespace({ success: false, retryAfterSeconds: 300 });
     const aiRun = vi.fn();
@@ -167,5 +187,181 @@ describe("budget/deadline — degraded provider fallback contract", () => {
     expect(body.degraded).toBe(true);
     expect(body.degradation.reason).toBe("provider_timeout");
     expect(body.reply).toContain("Jazz i Aarhus");
+  });
+});
+
+// ── Review-fix probes (request level) ───────────────────────────────────────
+
+function authFetchMock() {
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input: any, init: any) => {
+    const url = String(input);
+    if (url.includes("/auth/v1/user")) {
+      const auth = String(init?.headers?.Authorization ?? init?.headers?.authorization ?? "");
+      const id = auth.replace("Bearer ", "");
+      return new Response(JSON.stringify({ id }), { status: 200 });
+    }
+    return new Response("{}", { status: 200 });
+  });
+}
+function authedChat(userId: string, content = "godmorgen"): Request {
+  return new Request("https://worker.example/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.91", Authorization: `Bearer ${userId}` },
+    body: JSON.stringify({ messages: [{ role: "user", content }] }),
+  });
+}
+const toolCall = (name: string, args: Record<string, unknown>, id = "call-x") => ({ id, function: { name, arguments: JSON.stringify(args) } });
+
+describe("budget/deadline — EVERY tool call is raced against the deadline", () => {
+  const modelThatMustNotFollowUp = (calls: unknown[]) =>
+    vi.fn().mockResolvedValueOnce({ tool_calls: calls }).mockResolvedValue({ response: "MODellEN SKAL ALDRIG SVARE" });
+
+  async function run(aiRun: any) {
+    const started = Date.now();
+    const response = await worker.fetch!(chatRequest("jazz i Aarhus?"), baseEnv(aiRun, { CHAT_TURN_DEADLINE_MS: "150" }), executionContext());
+    return { response, elapsed: Date.now() - started, body: await response.json() as any };
+  }
+
+  it("a hanging searchPlaces stops at the deadline: 200 partial, no follow-up model call, rows only from what was retrieved", async () => {
+    vi.mocked(queries.searchPlaces).mockImplementationOnce(() => new Promise(() => {}) as any);
+    const aiRun = modelThatMustNotFollowUp([
+      toolCall("search_events", { city: "Aarhus" }, "c1"),
+      toolCall("search_places", { city: "Aarhus" }, "c2"),
+    ]);
+    const { response, elapsed, body } = await run(aiRun);
+    expect(response.status).toBe(200);
+    expect(elapsed).toBeLessThan(1500);
+    expect(body.partial).toBe(true);
+    expect(body.degradation.reason).toBe("turn_deadline_exceeded");
+    expect(body.reply).toContain("Tidsgrænsen");
+    expect(body.reply).toContain("Jazz i Aarhus"); // retrieved BEFORE the hang
+    expect(body.event_ids).toEqual(["00000000-0000-4000-8000-0000000000b1"]);
+    expect(body.place_ids).toEqual([]);
+    expect(JSON.stringify(body)).not.toContain("SKAL ALDRIG");
+    expect((aiRun as any).mock.calls.filter((c: any[]) => String(c[0]).includes("llama"))).toHaveLength(1);
+  });
+
+  it("a hanging searchRoutes stops at the deadline", async () => {
+    vi.mocked(queries.searchRoutes).mockImplementationOnce(() => new Promise(() => {}) as any);
+    const aiRun = modelThatMustNotFollowUp([toolCall("search_routes", { activity_type: "running" })]);
+    const { response, elapsed, body } = await run(aiRun);
+    expect(response.status).toBe(200);
+    expect(elapsed).toBeLessThan(1500);
+    expect(body.partial).toBe(true);
+    expect(body.degradation.reason).toBe("turn_deadline_exceeded");
+    expect((aiRun as any).mock.calls.filter((c: any[]) => String(c[0]).includes("llama"))).toHaveLength(1);
+  });
+
+  it("a hanging match_events RPC (semantic_search) stops at the deadline", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input: any) =>
+      String(input).includes("match_events") ? (new Promise(() => {}) as any) : Promise.resolve(new Response("{}", { status: 200 })));
+    const aiRun = vi.fn()
+      .mockResolvedValueOnce({ tool_calls: [toolCall("semantic_search", { kind: "events", query: "jazz" })] })
+      .mockImplementation((_m: string, input: any) => input?.text ? Promise.resolve({ data: [new Array(1024).fill(0.1)] }) : Promise.resolve({ response: "SKAL ALDRIG" }));
+    const { response, elapsed, body } = await run(aiRun);
+    fetchSpy.mockRestore();
+    expect(response.status).toBe(200);
+    expect(elapsed).toBeLessThan(1500);
+    expect(body.partial).toBe(true);
+    expect(body.event_ids).toEqual([]);
+    expect((aiRun as any).mock.calls.filter((c: any[]) => String(c[0]).includes("llama"))).toHaveLength(1);
+  });
+
+  it("a hanging write tool (RPC/event style fetch) stops at the deadline", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input: any) =>
+      String(input).includes("/auth/v1/user") ? Promise.resolve(new Response(JSON.stringify({ id: "user-A" }), { status: 200 }))
+        : String(input).includes("event_rsvps") ? (new Promise(() => {}) as any) : Promise.resolve(new Response("{}", { status: 200 })));
+    const aiRun = modelThatMustNotFollowUp([toolCall("rsvp_event", { event_id: "00000000-0000-4000-8000-0000000000b1", status: "going" })]);
+    const req = new Request("https://worker.example/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.92", Authorization: "Bearer user-A" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "meld mig til" }] }),
+    });
+    const started = Date.now();
+    const response = await worker.fetch!(req, baseEnv(aiRun, { CHAT_TURN_DEADLINE_MS: "150" }), executionContext());
+    fetchSpy.mockRestore();
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as any).partial).toBe(true);
+  });
+});
+
+describe("budget/deadline — row caps are visible on the chat RESPONSE", () => {
+  const manyEvents = Array.from({ length: 12 }, (_, i) => ({ id: `evt-${i}`, title: `Event ${i}`, location: "X", date: "2026-10-10" }));
+  const manyPlaces = Array.from({ length: 11 }, (_, i) => ({ id: `plc-${i}`, name: `Sted ${i}`, city: "Aarhus" }));
+
+  it("search_events over the row cap: payload carries rows_capped and only 8 events", async () => {
+    vi.mocked(queries.searchEvents).mockResolvedValueOnce({ results: manyEvents } as any);
+    const aiRun = vi.fn().mockResolvedValueOnce({ tool_calls: [toolCall("search_events", { city: "Aarhus" })] }).mockResolvedValue({ response: "Her er events" });
+    const response = await worker.fetch!(chatRequest("events i Aarhus?"), baseEnv(aiRun), executionContext());
+    const body = await response.json() as any;
+    expect(body.rows_capped).toBe(8);
+    expect(body.event_ids).toHaveLength(8);
+  });
+
+  it("search_places over the row cap is capped and flagged too (not only events)", async () => {
+    vi.mocked(queries.searchPlaces).mockResolvedValueOnce({ results: manyPlaces } as any);
+    const aiRun = vi.fn().mockResolvedValueOnce({ tool_calls: [toolCall("search_places", { city: "Aarhus" })] }).mockResolvedValue({ response: "Her er steder" });
+    const response = await worker.fetch!(chatRequest("steder i Aarhus?"), baseEnv(aiRun), executionContext());
+    const body = await response.json() as any;
+    expect(body.rows_capped).toBe(8);
+    expect(body.place_ids).toHaveLength(8);
+  });
+
+  it("within the cap: no rows_capped flag", async () => {
+    const aiRun = vi.fn().mockResolvedValueOnce({ tool_calls: [toolCall("search_events", { city: "Aarhus" })] }).mockResolvedValue({ response: "Her er events" });
+    const body = await (await worker.fetch!(chatRequest("events i Aarhus?"), baseEnv(aiRun), executionContext())).json() as any;
+    expect(body.rows_capped).toBeUndefined();
+  });
+});
+
+describe("budget/deadline — response byte cap on ALL reply paths", () => {
+  it("plain (no-tool) model reply over the cap is truncated and flagged", async () => {
+    const aiRun = vi.fn().mockResolvedValue({ response: "x".repeat(300_000) });
+    const response = await worker.fetch!(chatRequest("godmorgen"), baseEnv(aiRun), executionContext());
+    const text = await response.text();
+    expect(text.length).toBeLessThanOrEqual(200_000);
+    expect(JSON.parse(text).response_truncated).toBe(200_000);
+  });
+
+  it("degraded fallback path is byte-capped and flagged too", async () => {
+    vi.mocked(queries.searchEvents).mockResolvedValueOnce({ results: [{ ...DB_EVENT, title: "T".repeat(300_000) }] } as any);
+    const aiRun = vi.fn().mockRejectedValue(new Error("Workers AI 500 upstream"));
+    const response = await worker.fetch!(chatRequest("jazz i Aarhus?"), baseEnv(aiRun), executionContext());
+    const text = await response.text();
+    expect(text.length).toBeLessThanOrEqual(200_000);
+    const body = JSON.parse(text);
+    expect(body.response_truncated).toBe(200_000);
+    expect(body.degraded).toBe(true);
+  });
+
+  it("a normal-size reply carries no response_truncated", async () => {
+    const aiRun = vi.fn().mockResolvedValue({ response: "Hej!" });
+    const body = await (await worker.fetch!(chatRequest("godmorgen"), baseEnv(aiRun), executionContext())).json() as any;
+    expect(body.response_truncated).toBeUndefined();
+  });
+});
+
+describe("budget/deadline — account-key isolation at /chat level (name-respecting DO)", () => {
+  it("account A exhausted does not exhaust account B; each charge uses its own account key", async () => {
+    const fetchSpy = authFetchMock();
+    const { namespace, names } = fakeNamespace(undefined, { preset: { "session-chat-budget:v1:account:user-A": 20 } });
+    const aiRun = vi.fn().mockResolvedValue({ response: "Hej!" });
+    const env = baseEnv(aiRun, { RATE_LIMITER: namespace });
+    const a = await worker.fetch!(authedChat("user-A"), env, executionContext());
+    expect(a.status).toBe(429);
+    const b = await worker.fetch!(authedChat("user-B"), env, executionContext());
+    fetchSpy.mockRestore();
+    expect(b.status).toBe(200);
+    expect(names).toContain("session-chat-budget:v1:account:user-A");
+    expect(names).toContain("session-chat-budget:v1:account:user-B");
+  });
+
+  it("store outage for the session key fails OPEN at request level (200, model called)", async () => {
+    const { namespace } = fakeNamespace(undefined, { failFor: "session-chat-budget:" });
+    const aiRun = vi.fn().mockResolvedValue({ response: "Hej!" });
+    const response = await worker.fetch!(chatRequest("godmorgen"), baseEnv(aiRun, { RATE_LIMITER: namespace }), executionContext());
+    expect(response.status).toBe(200);
+    expect(aiRun).toHaveBeenCalled();
   });
 });

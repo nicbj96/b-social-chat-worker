@@ -8,7 +8,7 @@ set or a silent degradation.
 
 ## 1. Per-turn wall-clock deadline
 
-- ONE deadline covers the whole turn: first model call, every tool call, the
+- ONE deadline covers the whole turn: first model call, every tool call (places, routes, RPC, write/event tools — each raced individually), the
   embedding call, and the follow-up model call. Default **8000 ms**
   (`CHAT_TURN_DEADLINE_MS` env override, tests use small values).
 - Expiry raises the NAMED error `turn_deadline_exceeded`
@@ -48,14 +48,16 @@ set or a silent degradation.
 | Cap | Value | Named behaviour |
 |---|---|---|
 | Embedding dimensions | 1024 (`cap_exceeded_embedding_dims`) | vector never reaches the RPC; the named error reaches the reader; no rows invented |
-| Rows | 8 (`rows_capped: 8`) | collected events are capped with an explicit flag |
-| Response bytes | 200 000 (`response_truncated: 200000`) | the reply is cut to fit and the cut is flagged on the payload |
+| Rows | 8 (`rows_capped: 8`) | events, places and routes returned by any tool are capped at 8; the flag is surfaced on the chat response payload |
+| Response bytes | 200 000 (`response_truncated: 200000`) | applied to EVERY 200 /chat reply path (tool, no-tool, degraded fallback); the reply is cut to fit and the cut is flagged on the payload |
 
 ## 4. Degraded provider fallback contract (fail-closed)
 
-- Every model-call failure is classified: `provider_429` (429/quota/rate
-  limit), `provider_timeout` (`AbortError`/`TimeoutError`/timeout text),
-  `provider_error` (everything else).
+- Every model-call failure is classified from STRUCTURED signals (HTTP status,
+  error code, error name, also on `cause`): `provider_429` (status 429 /
+  rate_limit/quota code), `provider_timeout` (status 408/504, `AbortError`/
+  `TimeoutError`, timeout code), `provider_error` (everything else). Loose
+  substrings in message text (e.g. an id containing `429`) never classify.
 - The fallback answer is the deterministic catalogue path
   (`catalogueFallbackForTurn`) — it queries the LIVE database on every
   degraded turn. **There is no cached or replayed "fake" answer anywhere in

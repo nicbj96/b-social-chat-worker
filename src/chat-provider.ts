@@ -221,11 +221,29 @@ export function degradationNotice(
 
 /** Classify an upstream provider failure into a distinct named reason. */
 export function classifyProviderFailure(err: unknown): "provider_429" | "provider_timeout" | "provider_error" {
-  const msg = String(err instanceof Error ? err.message : err).toLowerCase();
-  if (msg.includes("429") || msg.includes("quota") || msg.includes("rate limit")) return "provider_429";
-  const name = err instanceof Error ? err.name : "";
-  if (name === "AbortError" || name === "TimeoutError" || msg.includes("timed out") || msg.includes("timeout")) {
+  // Structured signals ONLY: HTTP status, error code and error name (also on
+  // `cause`). Free-text message matching misclassified ids/names that merely
+  // contained "429" or "timeout".
+  const sources: any[] = [err, (err as any)?.cause, (err as any)?.response].filter((x) => x && typeof x === "object");
+  const statuses = sources.flatMap((o) => [o.status, o.statusCode]).filter((n) => typeof n === "number");
+  const codes = sources.flatMap((o) => [o.code, o.type]).filter((c) => typeof c === "string").map((c: string) => c.toLowerCase());
+  const names = sources.map((o) => o.name).filter((n) => typeof n === "string");
+  if (statuses.includes(429) || codes.some((c) => c === "429" || c.includes("rate_limit") || c.includes("quota") || c === "too_many_requests")) {
+    return "provider_429";
+  }
+  if (
+    statuses.some((n) => n === 408 || n === 504) ||
+    names.includes("AbortError") || names.includes("TimeoutError") ||
+    codes.some((c) => c.includes("timeout") || c.includes("timedout") || c === "etimedout" || c === "econnaborted")
+  ) {
     return "provider_timeout";
   }
+  // Workers AI surfaces its errors as plain Error("<code>: <text>") with a
+  // numeric leading code; accept ONLY that exact leading-token shape.
+  const msg = String(err instanceof Error ? err.message : err).trim().toLowerCase();
+  const lead = /^(\d{3})\b/.exec(msg)?.[1];
+  if (lead === "429" && !statuses.length) return "provider_429";
+  if (/^(quota|rate limit)\b/.test(msg) || /^(3040|3036): /.test(msg)) return "provider_429";
+  if (/^operation timed out\b/.test(msg)) return "provider_timeout";
   return "provider_error";
 }

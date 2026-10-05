@@ -131,6 +131,20 @@ describe("provider degradation contract", () => {
     expect(classifyProviderFailure(new Error("Workers AI 500 upstream"))).toBe("provider_error");
   });
 
+  it("uses structured status/code first and never misclassifies on a loose substring", () => {
+    expect(classifyProviderFailure(Object.assign(new Error("upstream"), { status: 429 }))).toBe("provider_429");
+    expect(classifyProviderFailure(Object.assign(new Error("upstream"), { statusCode: 429 }))).toBe("provider_429");
+    expect(classifyProviderFailure(Object.assign(new Error("upstream"), { cause: { status: 429 } }))).toBe("provider_429");
+    expect(classifyProviderFailure(Object.assign(new Error("upstream"), { code: "rate_limit_exceeded" }))).toBe("provider_429");
+    expect(classifyProviderFailure(Object.assign(new Error("upstream"), { status: 504 }))).toBe("provider_timeout");
+    expect(classifyProviderFailure(Object.assign(new Error("upstream"), { code: "ETIMEDOUT" }))).toBe("provider_timeout");
+    // Loose substrings inside ids/names must NOT classify:
+    expect(classifyProviderFailure(new Error("lookup of event id 4290-429-abc failed"))).toBe("provider_error");
+    expect(classifyProviderFailure(new Error("record 429 not found"))).toBe("provider_error");
+    expect(classifyProviderFailure(new Error("place timeout-cafe-1 failed"))).toBe("provider_error");
+    expect(classifyProviderFailure(Object.assign(new Error("429"), { status: 500 }))).toBe("provider_error");
+  });
+
   it("carries an explicit degradation notice — never a silent fallback answer", () => {
     const n = degradationNotice("provider_429", 60);
     expect(n.degraded).toBe(true);
