@@ -65,7 +65,7 @@ describe("formatFallbackReply", () => {
     expect(response.place_ids).toEqual(["p1", "p2"]);
     expect(response.event_ids).toEqual([]);
     // A good catalogue answer is not an outage: the caller decides on degraded.
-    expect(response.degraded).toBeUndefined();
+    expect((response as any).degraded).toBeUndefined();
   });
 
   it("is honest when a scoped search returns nothing", () => {

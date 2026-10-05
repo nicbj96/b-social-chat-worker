@@ -14,7 +14,7 @@ export type DiscoveryIntent = {
   limit: number;
 };
 
-type PlaceResult = { id?: string; name?: string; city?: string; nearest_city?: string };
+type PlaceResult = { id?: string; name?: string; city?: string; nearest_city?: string; latitude?: number | null; longitude?: number | null };
 type EventResult = { id?: string; title?: string; location?: string; date?: string; latitude?: number | null; longitude?: number | null };
 
 /**
