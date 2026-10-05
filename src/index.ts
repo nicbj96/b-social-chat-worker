@@ -58,6 +58,8 @@ interface Env extends RateLimitEnv {
   /** Optional. Preferred for AI-usage telemetry if ever added; the anon
    *  SUPABASE_KEY works too because record_ai_call is token-gated. */
   SUPABASE_SERVICE_ROLE_KEY?: string;
+  /** Optional service_role key; lets resolveChatTier read plus_subscriptions without a user JWT. */
+  SUPABASE_SERVICE_KEY?: string;
   /** Shared token proving this worker may increment ai_usage_daily. Without it
    *  record_ai_call is a no-op, so the public anon key alone cannot inflate it. */
   AI_USAGE_TOKEN?: string;
@@ -1531,7 +1533,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
     // missing/broken store fails open (the per-actor rate limiter still
     // applies) and never takes chat down.
     const sessionBudgetKey_ = sessionBudgetKey(userId, await rateLimitActorKey(request, "/chat"));
-    const tier = await resolveChatTier(env, userId);
+    const tier = await resolveChatTier(env, userId, userJwt);
     const sessionBudget = await consumeSessionTurnBudget(
       env.RATE_LIMITER ? env.RATE_LIMITER.getByName(sessionBudgetKey_) : undefined,
       sessionBudgetKey_, 1, CHAT_TIERS[tier],

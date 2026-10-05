@@ -1,16 +1,31 @@
 import type { ChatTier } from "./chat-provider";
 
-/** Server-side Plus check with the service key. Fail-safe: any error → "free". */
+/**
+ * Server-side Plus check. RLS on plus_subscriptions: select_own for
+ * authenticated, ALL for service_role — the anon key alone sees nothing.
+ * Credentials: service key if set, else the caller's user JWT (apikey = anon),
+ * else no lookup. Fail-safe: any error → "free".
+ */
 export async function resolveChatTier(
-  env: { SUPABASE_URL: string; SUPABASE_KEY: string },
+  env: { SUPABASE_URL: string; SUPABASE_KEY: string; SUPABASE_SERVICE_KEY?: string },
   userId: string | null,
+  userJwt: string | null,
   now = Date.now(),
 ): Promise<ChatTier> {
   if (!userId) return "free";
+  let headers: Record<string, string>;
+  if (env.SUPABASE_SERVICE_KEY) {
+    headers = { apikey: env.SUPABASE_SERVICE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}` };
+  } else if (userJwt) {
+    headers = { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${userJwt}` };
+  } else {
+    console.error(JSON.stringify({ event: "plus_lookup_failed", reason: "no_credentials" }));
+    return "free";
+  }
   try {
     const url = `${env.SUPABASE_URL}/rest/v1/plus_subscriptions?user_id=eq.${encodeURIComponent(userId)}&status=in.(active,trialing)&select=current_period_end&order=current_period_end.desc.nullsfirst&limit=1`;
     const res = await fetch(url, {
-      headers: { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}` },
+      headers,
       signal: AbortSignal.timeout(1500),
     });
     if (!res.ok) throw new Error(`status ${res.status}`);
