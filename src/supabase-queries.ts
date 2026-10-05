@@ -68,7 +68,7 @@ export async function searchEvents(
 
   let query = supabase
     .from("events")
-    .select("id, title, description, location, date, end_date, all_day, status, country, source, url, category, price, price_currency, price_evidence, interest_tags, suitable_for_modes, indoor_outdoor")
+    .select("id, title, description, location, date, end_date, all_day, status, country, source, url, category, price, price_currency, price_evidence, interest_tags, suitable_for_modes, indoor_outdoor, latitude, longitude")
     .not("date", "is", null)
     .or("status.eq.active,status.is.null")
     // Known end: include ongoing until (not including) end. Unknown end:
@@ -143,6 +143,10 @@ export async function searchEvents(
       tags: e.interest_tags?.join(", "),
       modes: e.suitable_for_modes?.join(", "),
       indoor_outdoor: e.indoor_outdoor,
+      // events.latitude/longitude exist (see b-social-pages searchDiscoverySql
+      // schema). Null stays null: a missing coordinate must never become (0,0).
+      latitude: Number.isFinite(e.latitude) ? e.latitude : null,
+      longitude: Number.isFinite(e.longitude) ? e.longitude : null,
     })),
   };
 }

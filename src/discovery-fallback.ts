@@ -15,7 +15,7 @@ export type DiscoveryIntent = {
 };
 
 type PlaceResult = { id?: string; name?: string; city?: string; nearest_city?: string };
-type EventResult = { id?: string; title?: string; location?: string; date?: string };
+type EventResult = { id?: string; title?: string; location?: string; date?: string; latitude?: number | null; longitude?: number | null };
 
 /**
  * Which language to answer in.
@@ -546,6 +546,23 @@ export function formatFallbackReply(
     tool_calls_made: ["direct_discovery_fallback"],
     place_ids: selectedPlaces.map((place) => String(place.id)).slice(0, intent.limit),
     event_ids: selectedEvents.map((event) => String(event.id)),
+    // Same shape as the normal discovery reply (index.ts /discovery sources[]),
+    // so the client's map handoff can read coordinates from verified_fields.
+    sources: selectedEvents.map((event) => ({
+      id: String(event.id),
+      kind: "event" as const,
+      url: `/event/${event.id}`,
+      verified_fields: {
+        id: String(event.id),
+        title: event.title,
+        location: event.location ?? null,
+        date: event.date ?? null,
+        latitude: Number.isFinite(event.latitude) ? event.latitude : null,
+        longitude: Number.isFinite(event.longitude) ? event.longitude : null,
+      },
+      retrieved_at: new Date().toISOString(),
+      source_updated_at: null,
+    })),
     suggested_tag_slugs: intent.placeCategory ? [intent.placeCategory] : [],
     degraded: true,
   };

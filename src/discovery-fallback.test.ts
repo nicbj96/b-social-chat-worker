@@ -614,3 +614,30 @@ describe("audit #1: date-aware intent and gradual relaxation", () => {
     expect(r.relaxed).toEqual([]);
   });
 });
+
+describe("audit #4: degraded reply carries ids and coordinates for the map handoff", () => {
+  it("returns event_ids plus sources[] (same shape as the normal discovery reply) with lat/lng", () => {
+    const out: any = formatFallbackReply(
+      { kind: "events", city: "Aarhus", limit: 4 },
+      [],
+      [
+        { id: "e1", title: "Jazz", location: "Aarhus", date: "x", latitude: 56.15, longitude: 10.2 } as any,
+        { id: "e2", title: "Uden koordinater", location: "Aarhus", latitude: null, longitude: null } as any,
+      ],
+      "da",
+    );
+    expect(out.event_ids).toEqual(["e1", "e2"]);
+    expect(out.sources).toHaveLength(2);
+    expect(out.sources[0]).toMatchObject({
+      id: "e1",
+      kind: "event",
+      url: "/event/e1",
+      verified_fields: { id: "e1", latitude: 56.15, longitude: 10.2 },
+      source_updated_at: null,
+    });
+    expect(typeof out.sources[0].retrieved_at).toBe("string");
+    // missing coordinates stay null, never (0,0)
+    expect(out.sources[1].verified_fields.latitude).toBeNull();
+    expect(out.degraded).toBe(true);
+  });
+});
