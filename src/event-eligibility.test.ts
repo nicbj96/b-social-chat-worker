@@ -133,6 +133,27 @@ describe("search_events facts through the /chat caller", () => {
     expect(result.results[0].timezone).toBeNull();
   });
 
+  it("shows a Danish event without event_timezone in Copenhagen time, no UTC suffix", async () => {
+    const { result } = await chatEvents([event({ country: "DK", location: "København", date: "2026-10-10T17:30:00Z" })]);
+    expect(result.results[0].date).toContain("kl. 19.30");
+    expect(result.results[0].date).not.toContain("tidszone ukendt");
+    expect(result.results[0].date).not.toContain("UTC");
+  });
+
+  it("uses event_timezone when present and selects the column", async () => {
+    const { result, queries } = await chatEvents([event({ country: "US", event_timezone: "America/New_York", date: "2026-10-10T17:30:00Z" })]);
+    expect(result.results[0].date).toContain("13.30");
+    expect(result.results[0].date).not.toContain("tidszone ukendt");
+    expect(result.results[0].date).not.toContain("UTC");
+    expect(result.results[0].timezone).toBe("America/New_York");
+    expect(queries[0].searchParams.get("select")!.split(",").map((c) => c.trim())).toContain("event_timezone");
+  });
+
+  it("event_timezone wins over a Danish country", async () => {
+    const { result } = await chatEvents([event({ country: "DK", event_timezone: "Atlantic/Faroe", date: "2026-10-10T17:30:00Z" })]);
+    expect(result.results[0].date).toContain("18.30");
+  });
+
   it.each([event({ all_day: true }), event({ date: "2026-10-25T00:00:00Z" })])(
     "does not invent a clock time for all-day or midnight-sentinel events", async (row) => {
       const { result } = await chatEvents([row]);
