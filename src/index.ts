@@ -19,6 +19,7 @@ import {
 } from "./supabase-queries";
 import { sendWebPush, type PushMessage } from "./webpush";
 import { isSafeEntityId, isValidUuid, clampString, clampNumber } from "./validate";
+import { executeSecureAddNote, buildTelemetryEvent } from "./secure-actions";
 import { guardedFetch } from "./fetchguard";
 import { fetchWeather, haversineKm, estimateTravelMinutes, normalizeMode, isValidLatLng } from "./context-tools";
 import { enforceRateLimit, enforceAiDailyBudget, chargeAiDailyBudget, type RateLimitEnv } from "./ratelimit";
@@ -1108,6 +1109,10 @@ function parseToolArgs(raw: unknown): Record<string, any> | null {
 async function notifyCommandCenter(env: Env, message: string, context: unknown) {
   if (!env.COMMAND_CENTER_INGEST_URL || !env.COMMAND_CENTER_INGEST_TOKEN || !message) return;
 
+  // Plan §8 P183: standard telemetry carries NO raw chat text, no raw query
+  // and no precise GPS. The forwarded payload is a coarse allowlisted event;
+  // the reader-visible answer always lives on the site, not in the pipeline.
+  // Auth headers and secret handling are unchanged.
   const headers: Record<string, string> = {
     "content-type": "application/json",
     "x-b-social-ingest-token": env.COMMAND_CENTER_INGEST_TOKEN,
@@ -1125,13 +1130,11 @@ async function notifyCommandCenter(env: Env, message: string, context: unknown) 
       channel: "b-social.net chat",
       fromName: "Website visitor",
       subject: "Website chat",
-      body: message,
+      body: "[chat-indhold videresendes ikke]",
       sentiment: "warm",
-      metadata: {
-        context,
-        worker: "b-social-chat",
-        received_at: new Date().toISOString(),
-      },
+      metadata: buildTelemetryEvent(context),
+      worker: "b-social-chat",
+      received_at: new Date().toISOString(),
     }),
   });
 }
@@ -1612,6 +1615,8 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
             const groundedToolResults: GroundedToolResult[] = [];
             let turnIntentProposal: IntentProposal | undefined;
             const toolResultErrors: string[] = [];
+    // Plan §8 P180/P181: one turn = one durable action per identical payload.
+    const turnActionMemo = new Map<string, Record<string, unknown>>();
 
             for (const toolCall of aiResponse.tool_calls) {
               const fnName = toolCall.function.name;
@@ -1957,32 +1962,10 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
           }
 
           case "add_note": {
-            if (!userId || !userJwt) { result = { error: "Du skal være logget ind for at gemme dette" }; break; }
-            try {
-              const notePayload: Record<string, any> = {
-                user_id: userId,
-                content: fnArgs.content,
-              };
-              if (fnArgs.title) notePayload.title = fnArgs.title;
-              if (fnArgs.tags && fnArgs.tags.length > 0) notePayload.tags = fnArgs.tags;
-              const r = await fetch(`${env.SUPABASE_URL}/rest/v1/notes`, {
-                method: "POST",
-                headers: {
-                  apikey: env.SUPABASE_KEY,
-                  Authorization: `Bearer ${userJwt}`,
-                  "Content-Type": "application/json",
-                  Prefer: "return=representation",
-                },
-                body: JSON.stringify(notePayload),
-              });
-              if (!r.ok) {
-                const errText = await r.text();
-                result = { error: "Kunne ikke oprette note", details: errText };
-              } else {
-                const rows: any[] = await r.json();
-                result = { ok: true, note_id: rows[0]?.id, title: rows[0]?.title };
-              }
-            } catch (e: any) { result = { error: "Kunne ikke oprette note", details: e.message }; }
+            // Plan §§8 P176–181: the whole write runs through the secure
+            // actions contract — server-validated args, stable action id,
+            // durable dedup, exact-row readback before any saved confirmation.
+            result = await executeSecureAddNote(env, userId, userJwt, fnArgs, userMessages, turnActionMemo);
             break;
           }
 
