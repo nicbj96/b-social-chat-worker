@@ -67,6 +67,18 @@ export const TOOLS = [
             type: "string",
             description: "Bynavn at filtrere eventets location på, f.eks. 'Aarhus'",
           },
+          date_from: {
+            type: "string",
+            description: "Inklusiv nedre grænse som ISO-tid med Z eller eksplicit offset. Medtager igangværende events med kendt sluttid; ukendt sluttid medtages kun hvis starten ikke er passeret. Gæt ikke offset for en ukendt lokal tidszone.",
+          },
+          date_to: {
+            type: "string",
+            description: "Eksklusiv øvre grænse for start som ISO-tid med Z eller eksplicit offset. Datofiltre anvendes før resultatloftet på 8.",
+          },
+          timezone: {
+            type: "string",
+            description: "Kun eksplicit ønsket IANA-visningstidszone, fx Europe/Copenhagen. Default er mærket UTC, ikke eventets lokale tidszone. Eventets tidszone og valuta er ukendte; udled dem aldrig fra land.",
+          },
         },
       },
     },
@@ -199,7 +211,7 @@ export const TOOLS = [
     function: {
       name: "rsvp_event",
       description:
-        "Du SKAL kalde dette tool når brugeren siger 'jeg vil med', 'tilmeld mig', 'reservér plads', 'sæt mig på listen', 'jeg er på'. Default status='going'. SIG ALDRIG 'du er tilmeldt' uden at have kaldt dette tool først.",
+        "Gem kun en deltagelsesmarkering i B Social, ikke billetkøb eller reservation hos arrangøren. Brug når brugeren vil markere 'jeg vil med' eller interesse. Ved ønske om billet/reservation: forklar begrænsningen, kald ikke tool'et som erstatning. Default status='going'. Bekræft kun deltagelsesmarkeringen efter succes; sig aldrig at en billet eller plads er sikret.",
       parameters: {
         type: "object",
         properties: {
@@ -296,6 +308,24 @@ export const TOOLS = [
       },
     },
   },
+  {
+    type: "function" as const,
+    function: {
+      name: "propose_discovery_intent",
+      description:
+        "Foreslå en ÆNDRING af brugerens nuværende søgeintent (query, type event/place/both, dato, pris med ISO-valuta, tags, geografi). Kald dette når brugeren beder om en ændring af søgningen ('vis steder i stedet for events', 'kun under 200 kr', 'næste weekend'). Du SKAL sende den fulde ændring i kontraktværdier — ugyldige værdier afvises og gættes ikke: kind er kun 'event'/'place'/'both', valuta kun ISO-kode (DKK/EUR/...), datoer ISO-instants i Z, tags kun slug-arrays. returnerer en valideret proposal brugeren kan Anvende.",
+      parameters: {
+        type: "object",
+        properties: {
+          change: {
+            type: "object",
+            description: "Kun felter der ændres: {query?, kind?, date?, price?, tags?, geography?, sort?}. Kind kun event/place/both; valuta kun 3-bogstavs ISO-kode; date er {from,to,timezone}-instants; tags er {selected:[slugs]}; geografi er den fulde kontraktform (world/country/region/radius).",
+          },
+        },
+        required: ["change"],
+      },
+    },
+  },
 ];
 
 export type ToolCallArgs = {
@@ -311,6 +341,9 @@ export type ToolCallArgs = {
     mode?: string;
     indoor_outdoor?: string;
     city?: string;
+    date_from?: string;
+    date_to?: string;
+    timezone?: string;
   };
   search_routes: {
     activity_type?: string;

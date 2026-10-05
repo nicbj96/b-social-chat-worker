@@ -13,6 +13,7 @@ import {
   isDiscoverySeekingMessage,
   looksUngroundedDiscoveryReply,
   repairContradictoryGroundedReply,
+  searchEventsRelaxing,
 } from "./discovery-fallback";
 
 describe("inferResponseLanguage", () => {
@@ -580,5 +581,63 @@ describe("aiBreaker", () => {
     // And the counter really reset: two more failures must not reopen it.
     recordAiFailure(); recordAiFailure();
     expect(aiBreakerIsOpen()).toBe(false);
+  });
+});
+
+describe("audit #1: date-aware intent and gradual relaxation", () => {
+  const NOW = new Date("2026-10-07T10:00:00Z"); // Wednesday
+  it("recognises 'noget for børn på søndag i Aarhus' as an events question with a window", () => {
+    expect(isDiscoverySeekingMessage("noget for børn på søndag i Aarhus")).toBe(true);
+    const intent = inferDiscoveryIntent("noget for børn på søndag i Aarhus", undefined, NOW);
+    expect(intent).toMatchObject({ kind: "events", city: "Aarhus", eventCategory: "familie" });
+    expect(intent.dateWindow?.from).toBe("2026-10-10T22:00:00.000Z");
+  });
+
+  it("loosens date, then category, never the city, and reports what it dropped", async () => {
+    const intent = inferDiscoveryIntent("noget for børn på søndag i Aarhus", undefined, NOW);
+    const calls: any[] = [];
+    const r = await searchEventsRelaxing(intent, async (f) => {
+      calls.push(f);
+      return f.category || f.date_from ? { results: [] } : { results: [{ id: "e1", title: "X" }] };
+    });
+    expect(calls.map((c) => [Boolean(c.date_from), c.category])).toEqual([[true, "familie"], [false, "familie"], [false, undefined]]);
+    expect(calls.every((c) => c.city === "Aarhus")).toBe(true);
+    expect(r.relaxed).toEqual(["date", "category"]);
+    const reply = formatFallbackReply(intent, [], r.results, "da", r.relaxed).reply;
+    expect(reply).toContain("datoen og kategorien");
+    expect(reply).toContain("• X");
+  });
+
+  it("stops at the first step that has results and stays silent about relaxation", async () => {
+    const intent = inferDiscoveryIntent("noget for børn i Aarhus", undefined, NOW);
+    const r = await searchEventsRelaxing(intent, async () => ({ results: [{ id: "e1", title: "X" }] }));
+    expect(r.relaxed).toEqual([]);
+  });
+});
+
+describe("audit #4: degraded reply carries ids and coordinates for the map handoff", () => {
+  it("returns event_ids plus sources[] (same shape as the normal discovery reply) with lat/lng", () => {
+    const out: any = formatFallbackReply(
+      { kind: "events", city: "Aarhus", limit: 4 },
+      [],
+      [
+        { id: "e1", title: "Jazz", location: "Aarhus", date: "x", latitude: 56.15, longitude: 10.2 } as any,
+        { id: "e2", title: "Uden koordinater", location: "Aarhus", latitude: null, longitude: null } as any,
+      ],
+      "da",
+    );
+    expect(out.event_ids).toEqual(["e1", "e2"]);
+    expect(out.sources).toHaveLength(2);
+    expect(out.sources[0]).toMatchObject({
+      id: "e1",
+      kind: "event",
+      url: "/event/e1",
+      verified_fields: { id: "e1", latitude: 56.15, longitude: 10.2 },
+      source_updated_at: null,
+    });
+    expect(typeof out.sources[0].retrieved_at).toBe("string");
+    // missing coordinates stay null, never (0,0)
+    expect(out.sources[1].verified_fields.latitude).toBeNull();
+    expect(out.degraded).toBe(true);
   });
 });

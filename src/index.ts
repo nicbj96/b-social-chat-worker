@@ -1,3 +1,5 @@
+import { eventPriceLabel } from "./event-price";
+import { parseSearchIntent } from "./discovery-contract";
 import * as Sentry from "@sentry/cloudflare";
 import { cityToBBox } from "./city-bbox";
 import { SYSTEM_PROMPT } from "./system-prompt";
@@ -7,6 +9,8 @@ import { promptVersion } from "./promptVersion";
 // to remember to bump is wrong the first time anyone edits in a hurry.
 const PROMPT_VERSION = promptVersion(SYSTEM_PROMPT);
 import { TOOLS } from "./tools";
+import {fetchDiscoveryPage,DiscoveryError} from './discovery-retrieval';
+import {createClient} from '@supabase/supabase-js';
 import {
   createSupabaseClient,
   searchEvents,
@@ -15,12 +19,35 @@ import {
 } from "./supabase-queries";
 import { sendWebPush, type PushMessage } from "./webpush";
 import { isSafeEntityId, isValidUuid, clampString, clampNumber } from "./validate";
+import { executeSecureAddNote, buildTelemetryEvent } from "./secure-actions";
 import { guardedFetch } from "./fetchguard";
 import { fetchWeather, haversineKm, estimateTravelMinutes, normalizeMode, isValidLatLng } from "./context-tools";
-import { enforceRateLimit, enforceAiDailyBudget, chargeAiDailyBudget, type RateLimitEnv } from "./ratelimit";
+import { enforceRateLimit, enforceAiDailyBudget, aiCeilingReached, chargeAiDailyBudget, type RateLimitEnv } from "./ratelimit";
 import { runAiCounted, aiCostSnapshot, setAiUsageReporter } from "./aiCost";
-import { aiBreakerIsOpen, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
-import type { DiscoveryIntent } from "./discovery-fallback";
+import { proposeIntentChange, type IntentProposal } from "./chat-intent-proposal";
+import { buildGroundedSources, groundModelReply, type GroundedToolResult } from "./grounded-answer";
+import { TurnBudget, TurnBudgetExceeded } from "./chat-budget";
+import {
+  TurnDeadline,
+  TurnDeadlineExceeded,
+  ResourceCapExceeded,
+  RESOURCE_CAPS,
+  assertEmbeddingDims,
+  capReplyBytes,
+  capRows,
+  classifyProviderFailure,
+  CHAT_TIERS,
+  SESSION_BUDGET_WINDOW_MS,
+  consumeSessionTurnBudget,
+  degradationNotice,
+  sessionBudgetKey,
+  turnDeadlineMs,
+  type DegradationReason,
+} from "./chat-provider";
+import { rateLimitActorKey } from "./ratelimit";
+import { resolveChatTier } from "./plus-tier";
+import { aiBreakerIsOpen, searchEventsRelaxing, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
+import type { DiscoveryIntent, Relaxation } from "./discovery-fallback";
 
 export { RateLimitDurableObject } from "./rate-limit-do";
 
@@ -32,6 +59,8 @@ interface Env extends RateLimitEnv {
   /** Optional. Preferred for AI-usage telemetry if ever added; the anon
    *  SUPABASE_KEY works too because record_ai_call is token-gated. */
   SUPABASE_SERVICE_ROLE_KEY?: string;
+  /** Optional service_role key; lets resolveChatTier read plus_subscriptions without a user JWT. */
+  SUPABASE_SERVICE_KEY?: string;
   /** Shared token proving this worker may increment ai_usage_daily. Without it
    *  record_ai_call is a no-op, so the public anon key alone cannot inflate it. */
   AI_USAGE_TOKEN?: string;
@@ -48,6 +77,7 @@ interface Env extends RateLimitEnv {
   ADMIN_ASK_KEY?: string; // Phase 2.5: gates /admin/ask (Telegram "bare spørg")
   WHISPER_MODEL?: string; // Phase 7: override speech-to-text model
   ELEVENLABS_API_KEY?: string; // Phase 7.4: if set, use ElevenLabs Scribe (best Danish STT) as primary
+  CHAT_TURN_DEADLINE_MS?: string; // Plan §9 P188: per-turn wall-clock budget override (tests)
 }
 
 // Chat message type
@@ -1101,6 +1131,10 @@ function parseToolArgs(raw: unknown): Record<string, any> | null {
 async function notifyCommandCenter(env: Env, message: string, context: unknown) {
   if (!env.COMMAND_CENTER_INGEST_URL || !env.COMMAND_CENTER_INGEST_TOKEN || !message) return;
 
+  // Plan §8 P183: standard telemetry carries NO raw chat text, no raw query
+  // and no precise GPS. The forwarded payload is a coarse allowlisted event;
+  // the reader-visible answer always lives on the site, not in the pipeline.
+  // Auth headers and secret handling are unchanged.
   const headers: Record<string, string> = {
     "content-type": "application/json",
     "x-b-social-ingest-token": env.COMMAND_CENTER_INGEST_TOKEN,
@@ -1118,13 +1152,11 @@ async function notifyCommandCenter(env: Env, message: string, context: unknown) 
       channel: "b-social.net chat",
       fromName: "Website visitor",
       subject: "Website chat",
-      body: message,
+      body: "[chat-indhold videresendes ikke]",
       sentiment: "warm",
-      metadata: {
-        context,
-        worker: "b-social-chat",
-        received_at: new Date().toISOString(),
-      },
+      metadata: buildTelemetryEvent(context),
+      worker: "b-social-chat",
+      received_at: new Date().toISOString(),
     }),
   });
 }
@@ -1185,6 +1217,7 @@ async function handleAdminAsk(request: Request, env: Env): Promise<Response> {
     return jsonResponse({ ok: false, error: "ask relay failed", details: String(err?.message || err) }, 502);
   }
 }
+
 
 // S4 — conservative input caps (cost + prompt-injection blowup guard).
 const MAX_MESSAGES = 30;        // keep only the last N turns
@@ -1265,6 +1298,8 @@ async function directDiscoveryFallback(
   const supabase = createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY);
   let places: any[] = [];
   let events: any[] = [];
+  let failed = false;
+  let relaxed: Relaxation[] = [];
 
   if (intent.kind === "places" || intent.kind === "both") {
     // H1 — the SAME gate the /search path uses, which is the point of putting
@@ -1276,21 +1311,29 @@ async function directDiscoveryFallback(
         city: intent.city,
         category: intent.placeCategory,
       });
+      if (result.error) failed = true;
       places = result.results || [];
     }
   }
 
   if (intent.kind === "events" || intent.kind === "both") {
-    const useSpecificTag = intent.queryTag && intent.queryTag !== intent.eventCategory;
-    const result = await searchEvents(supabase, {
-      city: intent.city,
-      category: useSpecificTag ? undefined : intent.eventCategory,
-      tags: useSpecificTag ? intent.queryTag : undefined,
-    });
+    const result = await searchEventsRelaxing(intent, (filters) => searchEvents(supabase, filters));
+    relaxed = result.relaxed;
+    if (result.error) failed = true;
     events = result.results || [];
   }
 
-  return jsonResponse(formatFallbackReply(intent, places, events, language));
+  if (failed && places.length === 0 && events.length === 0) {
+    return jsonResponse({
+      reply: language === "en"
+        ? "I couldn't search the catalogue right now. Please try again in a moment."
+        : "Jeg kunne ikke søge i kataloget lige nu. Prøv igen om lidt.",
+      tool_calls_made: ["direct_discovery_fallback"], place_ids: [], event_ids: [],
+      suggested_tag_slugs: [], degraded: true, retrieval_error: true,
+    });
+  }
+
+  return jsonResponse(formatFallbackReply(intent, places, events, language, relaxed));
 }
 
 /**
@@ -1312,15 +1355,62 @@ async function catalogueFallbackForTurn(
   env: Env,
   userMessages: ChatMessage[],
   context: { user_prefs?: { city?: string } },
+  // Plan §9 P190: a degraded provider must be DECLARED in the response — the
+  // deterministic answer never masquerades as an assistant success.
+  degradation?: { reason: DegradationReason; retryAfterSeconds?: number },
 ): Promise<Response> {
+  const extraHeaders =
+    degradation?.reason === "provider_429"
+      ? { "Retry-After": String(degradation.retryAfterSeconds ?? 60) }
+      : undefined;
+  const degradationField = degradation ? degradationNotice(degradation.reason, degradation.retryAfterSeconds) : null;
+  const withDegradation = (payload: any): any =>
+    degradationField ? { ...payload, degraded: true, degradation: degradationField } : payload;
   const latest = latestUserMessage(userMessages);
   if (!isDiscoverySeekingMessage(latest)) {
-    return jsonResponse(formatNonCatalogueReply(latest));
+    return jsonResponse(withDegradation(formatNonCatalogueReply(latest)), 200, extraHeaders);
   }
-  return await directDiscoveryFallback(env, userMessages, context);
+  const res = await directDiscoveryFallback(env, userMessages, context);
+  // directDiscoveryFallback queries the catalogue LIVE on every call — the
+  // degraded answer is freshly grounded, never a cached/fake replay.
+  const body = await res.json();
+  return jsonResponse(withDegradation(body), 200, extraHeaders);
 }
 
+/** Map an upstream failure to the degradation contract, 429 carrying its
+ *  Retry-After guidance (Plan §9 P190). */
+function providerDegradation(error: unknown): { reason: DegradationReason; retryAfterSeconds?: number } {
+  const reason = classifyProviderFailure(error);
+  return reason === "provider_429" ? { reason, retryAfterSeconds: 60 } : { reason };
+}
+
+/** Plan §9 M41: the response byte cap applies to EVERY /chat reply path
+ *  (tool, no-tool, degraded fallback). An over-cap reply is cut and flagged. */
+// Quota of the turn, set by handleChatInner at the budget charge and read (once)
+// by handleChat so every 200 reply carries { tier, cap, remaining }.
+const chatQuotaByRequest = new WeakMap<Request, { tier: string; cap: number; remaining: number | null }>();
+
 async function handleChat(request: Request, env: Env, executionCtx: ExecutionContext): Promise<Response> {
+  const res = await handleChatInner(request, env, executionCtx);
+  if (res.status !== 200) return res;
+  let text = await res.text();
+  const quota = chatQuotaByRequest.get(request);
+  if (quota) {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) text = JSON.stringify({ ...parsed, quota });
+    } catch { /* not JSON: leave unchanged */ }
+  }
+  const rebuilt = (t: string) => new Response(t, { status: res.status, headers: res.headers });
+  if (text.length <= RESOURCE_CAPS.response_bytes) return rebuilt(text);
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed.reply === "string") return rebuilt(JSON.stringify(capReplyBytes(parsed).payload));
+  } catch { /* not JSON: fall through unchanged */ }
+  return rebuilt(text);
+}
+
+async function handleChatInner(request: Request, env: Env, executionCtx: ExecutionContext): Promise<Response> {
   // Kept in the outer scope so the catch below can still answer a discovery
   // question after the model path has failed (see the catch for why).
   let fallbackMessages: ChatMessage[] | null = null;
@@ -1363,6 +1453,8 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
         last_session?: string;
         search_query?: string;
       };
+      /** The widget's validated current search intent for proposal turns. */
+      current_intent?: unknown;
     };
     try {
       // Measure the body we ACTUALLY received, not the one the caller claimed.
@@ -1383,6 +1475,40 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       return jsonResponse({ error: "Ugyldig JSON" }, 400);
     }
 
+    // Explicit intent bypasses legacy model/telemetry paths. Missing RPC fails
+    // closed; unsupported region metadata never silently widens geography.
+    if (Object.prototype.hasOwnProperty.call(body, "discovery_intent")) {
+      let intent;
+      try {intent=parseSearchIntent((body as {discovery_intent?:unknown}).discovery_intent);}
+      catch {return jsonResponse({error:'invalid_discovery_intent',contract_version:1},400);}
+      try {
+        // Verified user token or public anon; never service-role discovery.
+        const client=createClient(env.SUPABASE_URL,env.SUPABASE_KEY,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false},
+          global:{headers:userId && userJwt?{Authorization:`Bearer ${userJwt}`}:{}}});
+        const cursor=(body as {discovery_cursor?:unknown}).discovery_cursor;
+        const page=await fetchDiscoveryPage(client,{version:1,intent,pageSize:8,...(cursor!==undefined?{cursor:cursor as any}:{})},request.signal);
+        const sources=page.items.map(item=>({id:item.data.id,kind:item.kind,
+          url:`/${item.kind==='event'?'event':'sted'}/${item.data.id}`,verified_fields:item.data,
+          retrieved_at:page.retrievedAt,source_updated_at:null}));
+        const labels=page.items.map(item=>{
+          const d=item.data;
+          if(item.kind==='place') return String(d.name);
+          const price=eventPriceLabel(d.price, d.price_currency);
+          return `${d.title} — ${price}`;
+        });
+        return jsonResponse({reply:labels.length?labels.join('\n'):'Ingen resultater med de valgte filtre.',
+          event_ids:page.items.filter(i=>i.kind==='event').map(i=>i.data.id),place_ids:page.items.filter(i=>i.kind==='place').map(i=>i.data.id),
+          sources,applied_filters:intent,retrieval_status:page.status,consistency:page.consistency,
+          hasMore:page.hasMore,nextCursor:page.nextCursor,contract_version:1});
+      } catch(error) {
+        const code=error instanceof DiscoveryError?error.code:'discovery_unavailable';
+        const unsupported=code==='unsupported_region_metadata';
+        return jsonResponse({error:code,retrieval_status:unsupported?'unsupported':'failed',applied_filters:null,
+          reply:unsupported?'Regionen mangler verificeret metadata. Filtrene er bevaret.':'Søgningen kunne ikke gennemføres. Prøv igen.',contract_version:1},
+          unsupported?422:code.startsWith('invalid_')?400:503);
+      }
+    }
+
     // Support both { messages: [...] } and { message: "..." } while treating
     // every caller-provided role as untrusted input.
     const rawMessages = Array.isArray(body.messages)
@@ -1398,6 +1524,36 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       return jsonResponse({ error: "Ugyldige chatbeskeder" }, 400);
     }
     fallbackMessages = userMessages;
+
+    // Plan §9 P189/M41: the per-session/per-account turn ledger, persisted
+    // account-scoped in the Durable Object store. Exhaustion is a NAMED 429
+    // (session_budget_exhausted) with Retry-After and a Danish message; a
+    // missing/broken store fails open (the per-actor rate limiter still
+    // applies) and never takes chat down.
+    const sessionBudgetKey_ = sessionBudgetKey(userId, await rateLimitActorKey(request, "/chat"));
+    const tier = await resolveChatTier(env, userId, userJwt);
+    const sessionStore = env.RATE_LIMITER ? env.RATE_LIMITER.getByName(sessionBudgetKey_) : undefined;
+    const sessionCap = CHAT_TIERS[tier];
+    const quotaExhausted429 = (d: { retryAfterSeconds: number; persisted: boolean; cap: number }) => {
+      console.error(JSON.stringify({ event: "session_budget_exhausted", tier, persisted: d.persisted }));
+      const notice = degradationNotice(tier === "plus" ? "plus_fair_use_exhausted" : "session_budget_exhausted", d.retryAfterSeconds);
+      return jsonResponse(
+        { error: "session_budget_exhausted", retry_after_seconds: d.retryAfterSeconds, degraded: true, degradation: notice, notice: notice.notice,
+          quota: { tier, cap: d.cap, remaining: 0 }, upgrade: tier === "free" ? { href: "/plus" } : undefined },
+        429,
+        { "Retry-After": String(d.retryAfterSeconds) },
+      );
+    };
+    // Read-only pre-check (charges nothing): an already-exhausted account gets
+    // its 429 without any AI work. The actual debit happens just before the
+    // first model call, so turns that never reach the model cost no quota.
+    if (sessionStore && typeof (sessionStore as any).peek === "function") {
+      try {
+        const pk = await (sessionStore as any).peek(sessionCap, SESSION_BUDGET_WINDOW_MS);
+        if (!pk.success) return quotaExhausted429({ retryAfterSeconds: pk.retryAfterSeconds, persisted: true, cap: sessionCap });
+      } catch { /* fail-open: consume below decides */ }
+    }
+    chatQuotaByRequest.set(request, { tier, cap: sessionCap, remaining: null });
 
     executionCtx.waitUntil(notifyCommandCenter(env, latestUserMessage(userMessages), body.context || {}));
 
@@ -1518,6 +1674,12 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       ...userMessages,
     ];
 
+    // Plan §9 P188/M41: one wall-clock deadline for the whole turn. Expiry is
+    // a NAMED error (turn_deadline_exceeded), distinct from a model/upstream
+    // failure — a timed-out turn is OUR budget spent, not the provider being
+    // sick, so it must not open the AI breaker or fake a completion.
+    const deadline = new TurnDeadline(turnDeadlineMs(env.CHAT_TURN_DEADLINE_MS));
+
     // Breaker: once the AI has failed repeatedly, calling it again only spends
     // the reader's patience on a timeout we already expect. Go straight to the
     // grounded database answer.
@@ -1526,15 +1688,36 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
       return await catalogueFallbackForTurn(env, userMessages, ctx);
     }
 
+    // Global daily neuron ceiling (kill switch): skip every model call and
+    // answer from the catalogue, declared as provider_429. Fail-open.
+    const ceiling = await aiCeilingReached(env);
+    if (ceiling.reached) {
+      console.error(JSON.stringify({ event: "ai_daily_ceiling_reached", action: "direct_fallback" }));
+      return await catalogueFallbackForTurn(env, userMessages, ctx, { reason: "provider_429", retryAfterSeconds: ceiling.retryAfterSeconds ?? 60 });
+    }
+
+    // Debit the session quota now: this is the first point where a model call
+    // is certain (greeting/catalogue fallbacks, open breaker and the neuron
+    // ceiling all returned above without cost).
+    const sessionBudget = await consumeSessionTurnBudget(sessionStore, sessionBudgetKey_, 1, sessionCap);
+    if (!sessionBudget.allowed) return quotaExhausted429(sessionBudget);
+    chatQuotaByRequest.set(request, { tier, cap: sessionBudget.cap, remaining: sessionBudget.remaining });
+
     // First AI call — may include tool calls
     let aiResponse: any;
+    const budget = new TurnBudget();
     try {
-      aiResponse = await runAiCounted(env.AI, "@cf/meta/llama-4-scout-17b-16e-instruct", {
+      budget.reserveModel();
+      aiResponse = await deadline.race(runAiCounted(env.AI, "@cf/meta/llama-4-scout-17b-16e-instruct", {
         messages,
         tools: TOOLS,
         tool_choice: "auto",
-      });
+      }));
     } catch (error) {
+      if (error instanceof TurnDeadlineExceeded) {
+        console.error(JSON.stringify({ event: "turn_deadline_exceeded", phase: "first_model_call" }));
+        return catalogueFallbackForTurn(env, userMessages, ctx, { reason: "turn_deadline_exceeded" });
+      }
       // ANY AI failure falls back, not just a quota error. The database answer
       // is grounded and useful; rethrowing gave the reader nothing at all.
       recordAiFailure();
@@ -1543,9 +1726,14 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
         quota: isAiQuotaError(error),
         detail: String(error instanceof Error ? error.message : error).slice(0, 140),
       }));
-      return catalogueFallbackForTurn(env, userMessages, ctx);
+      return catalogueFallbackForTurn(env, userMessages, ctx, providerDegradation(error));
     }
     recordAiSuccess();
+
+    // A turn that hit the wall clock mid-tools gets an HONEST PARTIAL answer:
+    // only what the tools actually retrieved, with the deadline declared.
+    let deadlineHitMidTools = false;
+    let rowsCapped = false;
 
     // If the model wants to call tools, execute them
     if (aiResponse.tool_calls && aiResponse.tool_calls.length > 0) {
@@ -1563,8 +1751,20 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
             const collectedEventIds: string[] = [];
             const collectedPlaces: { id?: string; name?: string; city?: string }[] = [];
             const collectedEvents: { id?: string; title?: string; location?: string; date?: string }[] = [];
+            const groundedToolResults: GroundedToolResult[] = [];
+            let turnIntentProposal: IntentProposal | undefined;
+            const toolResultErrors: string[] = [];
+    // Plan §8 P180/P181: one turn = one durable action per identical payload.
+    const turnActionMemo = new Map<string, Record<string, unknown>>();
 
             for (const toolCall of aiResponse.tool_calls) {
+              // Plan §9 P188: a tool that would start after the wall clock
+              // expired must not start. The turn degrades honestly below.
+              if (deadline.expired()) {
+                deadlineHitMidTools = true;
+                toolResultErrors.push("turn_deadline_exceeded");
+                break;
+              }
               const fnName = toolCall.function.name;
               const fnArgs = parseToolArgs(toolCall.function?.arguments);
 
@@ -1579,6 +1779,17 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                 continue;
               }
 
+              const rowCapFlag = { hit: false };
+              const capToolRows = <T,>(rows: T[] | undefined): T[] => {
+                const c = capRows(rows || []);
+                if (c.capped) { rowsCapped = true; rowCapFlag.hit = true; }
+                return c.rows;
+              };
+              // Plan §9 P188: EVERY tool (places/routes/RPC/writes/events) runs
+              // under the same wall clock. A hanging tool stops the turn at the
+              // deadline instead of spending it unboundedly.
+              try {
+              await deadline.race((async () => {
               switch (fnName) {
                 case "semantic_search": {
                   // EVENTS: embedding -> match_events, as before.
@@ -1608,12 +1819,28 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                       // search it never made as one that found nothing.
                       let vec: number[] | undefined;
                       try {
-                        const emb: any = await runAiCounted(env.AI, "@cf/baai/bge-m3", { text: [fnArgs.query] });
+                        // Plan §9 P188: at most ONE embedding call per turn; a
+                        // second one is refused by name and reported as an
+                        // error, never replaced by a fake answer.
+                        // Plan §9 P188: at most ONE embedding call per turn; a
+                        // second one is refused by name and reported as an
+                        // error, never replaced by a fake answer. The call is
+                        // also raced against the turn deadline so a hung
+                        // embedding cannot spend the whole wall clock.
+                        budget.reserveEmbedding();
+                        const emb: any = await deadline.race(runAiCounted(env.AI, "@cf/baai/bge-m3", { text: [fnArgs.query] }));
                         vec = emb?.data?.[0];
+                        // M41 resource cap: assert the vector shape/dimension
+                        // before it reaches the RPC — a wrong-shaped vector is
+                        // a named cap error, never a silently degraded search.
+                        if (vec) assertEmbeddingDims(vec);
                       } catch (err) {
-                        console.error("Events embedding failed:", err);
+                        if (err instanceof TurnBudgetExceeded) out.events_error = "budget_exhausted_embedding_calls";
+                        else if (err instanceof TurnDeadlineExceeded) { out.events_error = "turn_deadline_exceeded"; deadlineHitMidTools = true; }
+                        else if (err instanceof ResourceCapExceeded) { out.events_error = `cap_exceeded_${err.cap}`; vec = undefined; }
+                        else { console.error("Events embedding failed:", err); }
                       }
-                      if (!vec) out.events_error = "embedding_failed";
+                      if (!vec && !out.events_error) out.events_error = "embedding_failed";
                       if (vec) {
                         const sbHeaders = { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}`, "Content-Type": "application/json" };
                         out.events = await rpcResultRows(`${env.SUPABASE_URL}/rest/v1/rpc/match_events`, sbHeaders, {
@@ -1623,12 +1850,19 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                           filter_country: fnArgs.country ?? bbox?.country ?? null,
                           ...bboxParams,
                         }, () => { out.events_error = "rpc_failed"; });
+                        // M41 row cap: the model is never handed more than one
+                        // page; a cap is flagged, not hidden.
+                        out.events = capToolRows(out.events);
+                        if (rowCapFlag.hit) out.rows_capped = RESOURCE_CAPS.rows;
                       }
                       (out.events || []).forEach((e: any) => {
                         if (!e?.id) return;
                         collectedEventIds.push(e.id);
                         collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date });
                       });
+                      if ((out.events || []).length > 0 && !out.events_error) {
+                        groundedToolResults.push({ kind: "event", retrieved_at: new Date().toISOString(), rows: out.events });
+                      }
                     }
                     if (kind === "places" || kind === "both") {
                       const placeQuery = String(fnArgs.query ?? "").trim();
@@ -1638,7 +1872,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                       const placeOutcome: SearchOutcome = placeQuery || fnArgs.city
                         ? await searchPlacesForQuery(env, placeQuery, 8, fnArgs.city)
                         : { results: [], skipped: "no_query_or_city" };
-                      out.places = placeOutcome.results;
+                      out.places = capToolRows(placeOutcome.results);
                       // H1/M3 — the model is told WHY the place half is empty
                       // ("no_place_intent", "no_city_or_category") or that it
                       // FAILED, so it cannot narrate a top-8 it never received.
@@ -1657,15 +1891,18 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                 case "search_events":
                   result = await searchEvents(supabase, fnArgs);
                   if (result.results) {
+                    result.results = capToolRows(result.results);
                     result.results.forEach((e: any) => {
                       if (!e?.id) return;
                       collectedEventIds.push(e.id);
                       collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date });
                     });
+                    if (result.results.length > 0) groundedToolResults.push({ kind: "event", retrieved_at: new Date().toISOString(), rows: result.results });
                   }
                   break;
                 case "search_routes":
                   result = await searchRoutes(supabase, fnArgs);
+                  if (result?.results) result.results = capToolRows(result.results);
                   break;
                 case "search_places": {
                   // H1 — this tool filters on city, category and tags, and
@@ -1680,11 +1917,28 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
                   }
                   result = await searchPlaces(supabase, fnArgs);
                   if (result.results) {
+                    result.results = capToolRows(result.results);
                     result.results.forEach((p: any) => {
                       if (!p?.id) return;
                       collectedPlaceIds.push(p.id);
                       collectedPlaces.push({ id: p.id, name: p.name, city: p.city });
                     });
+                    if (result.results.length > 0) groundedToolResults.push({ kind: "place", retrieved_at: new Date().toISOString(), rows: result.results });
+                  }
+                  break;
+                }
+
+                case "propose_discovery_intent": {
+                  // Plan §6 P163–166 / M38: the model only PROPOSES; the change
+                  // is validated here against the shared contract and an
+                  // invalid or unknown field is reported back verbatim, never
+                  // guessed into a contract value.
+                  const proposal = proposeIntentChange(body.current_intent, fnArgs.change);
+                  if (proposal.accepted) {
+                    turnIntentProposal = proposal.proposal;
+                    result = { proposal_ok: true, proposal_id: proposal.proposal.proposalId, changes: proposal.proposal.changes };
+                  } else {
+                    result = { proposal_ok: false, reason: proposal.reason, ...(proposal.invalid_fields ? { invalid_fields: proposal.invalid_fields } : {}) };
                   }
                   break;
                 }
@@ -1870,48 +2124,45 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
               });
               if (!r.ok) {
                 const errText = await r.text();
-                result = { error: "Kunne ikke tilmelde til event", details: errText };
+                result = { error: "Kunne ikke gemme deltagelsesmarkering", details: errText };
               } else {
-                result = { ok: true, event_id: fnArgs.event_id, status };
+                const statusLabel = status === "interested" ? "interesseret" : status === "not_going" ? "deltager ikke" : "deltager";
+                result = {
+                  ok: true, event_id: fnArgs.event_id, status, action: "participation_marker",
+                  message: `Din deltagelsesmarkering i B Social er gemt: ${statusLabel}. Det er ikke billetkøb eller reservation hos arrangøren.`,
+                };
               }
-            } catch (e: any) { result = { error: "Kunne ikke tilmelde til event", details: e.message }; }
+            } catch (e: any) { result = { error: "Kunne ikke gemme deltagelsesmarkering", details: e.message }; }
             break;
           }
 
           case "add_note": {
-            if (!userId || !userJwt) { result = { error: "Du skal være logget ind for at gemme dette" }; break; }
-            try {
-              const notePayload: Record<string, any> = {
-                user_id: userId,
-                content: fnArgs.content,
-              };
-              if (fnArgs.title) notePayload.title = fnArgs.title;
-              if (fnArgs.tags && fnArgs.tags.length > 0) notePayload.tags = fnArgs.tags;
-              const r = await fetch(`${env.SUPABASE_URL}/rest/v1/notes`, {
-                method: "POST",
-                headers: {
-                  apikey: env.SUPABASE_KEY,
-                  Authorization: `Bearer ${userJwt}`,
-                  "Content-Type": "application/json",
-                  Prefer: "return=representation",
-                },
-                body: JSON.stringify(notePayload),
-              });
-              if (!r.ok) {
-                const errText = await r.text();
-                result = { error: "Kunne ikke oprette note", details: errText };
-              } else {
-                const rows: any[] = await r.json();
-                result = { ok: true, note_id: rows[0]?.id, title: rows[0]?.title };
-              }
-            } catch (e: any) { result = { error: "Kunne ikke oprette note", details: e.message }; }
+            // Plan §§8 P176–181: the whole write runs through the secure
+            // actions contract — server-validated args, stable action id,
+            // durable dedup, exact-row readback before any saved confirmation.
+            result = await executeSecureAddNote(env, userId, userJwt, fnArgs, userMessages, turnActionMemo);
             break;
           }
 
           default:
             result = { error: `Ukendt funktion: ${fnName}` };
         }
+              })());
+              } catch (toolErr) {
+                if (toolErr instanceof TurnDeadlineExceeded) {
+                  console.error(JSON.stringify({ event: "turn_deadline_exceeded", phase: "tool_call", tool: fnName }));
+                  deadlineHitMidTools = true;
+                  toolResultErrors.push("turn_deadline_exceeded");
+                  break;
+                }
+                throw toolErr;
+              }
 
+        // Retrieval/tool failures travel to the grounding layer by name: they
+        // must be reported as errors, never reinterpreted as empty results.
+        for (const code of [result?.events_error, result?.places_error]) {
+          if (typeof code === "string" && !toolResultErrors.includes(code)) toolResultErrors.push(code);
+        }
         // Add tool result to conversation
         messages.push({
           role: "tool",
@@ -1920,22 +2171,38 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
         });
       }
 
-      // Second AI call — now with data from Supabase
+      // Second AI call — now with data from Supabase. Skipped entirely when
+      // the turn deadline expired mid-tools (Plan §9 P188): the honest
+      // partial answer is built from what the tools retrieved, never from an
+      // invented wrap-up.
       let finalResponse: any;
-      try {
-        finalResponse = await runAiCounted(env.AI, "@cf/meta/llama-4-scout-17b-16e-instruct", {
-          messages,
-        });
-      } catch (error) {
-        // Same rule as the first call: any failure falls back to grounded
-        // database results rather than giving the reader nothing.
-        recordAiFailure();
-        console.error(JSON.stringify({
-          event: "ai_followup_failed",
-          quota: isAiQuotaError(error),
-          detail: String(error instanceof Error ? error.message : error).slice(0, 140),
-        }));
-        return catalogueFallbackForTurn(env, userMessages, ctx);
+      if (deadlineHitMidTools || deadline.expired()) {
+        deadlineHitMidTools = true;
+        finalResponse = null;
+        console.error(JSON.stringify({ event: "turn_deadline_exceeded", phase: "followup_skipped" }));
+      } else {
+        try {
+          budget.reserveModel();
+          finalResponse = await deadline.race(runAiCounted(env.AI, "@cf/meta/llama-4-scout-17b-16e-instruct", {
+            messages,
+          }));
+        } catch (error) {
+          if (error instanceof TurnDeadlineExceeded) {
+            deadlineHitMidTools = true;
+            finalResponse = null;
+            console.error(JSON.stringify({ event: "turn_deadline_exceeded", phase: "followup_call" }));
+          } else {
+            // Same rule as the first call: any failure falls back to grounded
+            // database results rather than giving the reader nothing.
+            recordAiFailure();
+            console.error(JSON.stringify({
+              event: "ai_followup_failed",
+              quota: isAiQuotaError(error),
+              detail: String(error instanceof Error ? error.message : error).slice(0, 140),
+            }));
+            return catalogueFallbackForTurn(env, userMessages, ctx, providerDegradation(error));
+          }
+        }
       }
 
       // Collect tag slugs from tool arguments (for live filter update on frontend)
@@ -1953,18 +2220,60 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
         }
       }
 
-      return jsonResponse({
-              reply: repairContradictoryGroundedReply(
-                finalResponse.response || finalResponse.content || "",
-                collectedPlaces,
-                collectedEvents,
-                inferResponseLanguage(userMessages.map((m) => m.content).join(" ")),
-              ),
+      // Plan §7 P168–174 / M39: the model's reply is grounded against the
+      // evidence the deterministic tool path retrieved. Contradictory or
+      // invented facts are removed and re-rendered from verified fields; a
+      // failed retrieval surfaces as an explicit error, never as a null or a
+      // faked "no results". Evidence without any rows plus a named error is a
+      // failed retrieval; evidence without rows and no error is genuinely empty.
+      const groundedSources = buildGroundedSources(groundedToolResults);
+      const isNamedError = (code: string) =>
+        ["budget_exhausted_embedding_calls", "embedding_failed", "rpc_failed", "rpc_unreachable", "turn_deadline_exceeded"].includes(code)
+        || code.startsWith("cap_exceeded_");
+      const namedError = groundedToolResults.length === 0
+        ? toolResultErrors.find(isNamedError) ?? null
+        : null;
+      const replyLang = inferResponseLanguage(userMessages.map((m) => m.content).join(" ")) === "en" ? "en" : "da";
+      // Plan §9 P188 / M41: a deadline-expired turn answers honestly from the
+      // tool evidence alone — no second model call, no invented completion.
+      // groundModelReply with empty model text renders ONLY verified rows.
+      let grounded: { reply: string; grounding: string; corrections: string[] };
+      let deadlineDegradation: ReturnType<typeof degradationNotice> | undefined;
+      if (deadlineHitMidTools) {
+        const partial = groundModelReply("", groundedSources, { lang: replyLang, retrievalError: namedError ?? null });
+        deadlineDegradation = degradationNotice("turn_deadline_exceeded");
+        grounded = {
+          reply: partial.reply ? `${deadlineDegradation.notice}\n\n${partial.reply}` : deadlineDegradation.notice,
+          grounding: partial.grounding,
+          corrections: partial.corrections,
+        };
+      } else {
+        const repaired = repairContradictoryGroundedReply(
+          finalResponse.response || finalResponse.content || "",
+          collectedPlaces,
+          collectedEvents,
+          replyLang,
+        );
+        grounded = groundModelReply(repaired, groundedSources, { lang: replyLang, retrievalError: namedError ?? null });
+      }
+
+      // M41 resource cap: the response payload is byte-capped, and any cut is
+      // flagged on the payload — never a silently clipped answer.
+      const chatPayload = capReplyBytes({
+              reply: grounded.reply,
+              grounding: grounded.grounding,
+              corrections: grounded.corrections,
+              intent_proposal: turnIntentProposal,
               tool_calls_made: aiResponse.tool_calls.map((tc: any) => tc.function.name),
               place_ids: collectedPlaceIds,
               event_ids: collectedEventIds,
               suggested_tag_slugs: [...new Set(collectedTagSlugs)],
+              partial: deadlineHitMidTools || undefined,
+              ...(rowsCapped ? { rows_capped: RESOURCE_CAPS.rows } : {}),
+              ...(deadlineDegradation ? { degraded: true, degradation: deadlineDegradation } : {}),
+              budget: budget.snapshot(),
             });
+      return jsonResponse(chatPayload.payload);
           }
 
     // No tool calls — never invent discovery results. Fall back to direct DB search.
@@ -2021,7 +2330,7 @@ async function handleChat(request: Request, env: Env, executionCtx: ExecutionCon
 }
 
 // Helper to create JSON responses with CORS
-function jsonResponse(data: any, status = 200): Response {
+function jsonResponse(data: any, status = 200, extraHeaders?: Record<string, string>): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
@@ -2031,6 +2340,7 @@ function jsonResponse(data: any, status = 200): Response {
       // say something different" stops being checkable.
       "X-Prompt-Version": PROMPT_VERSION,
       ...CORS_HEADERS,
+      ...extraHeaders,
     },
   });
 }

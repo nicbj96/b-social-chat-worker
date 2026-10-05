@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chargeAiDailyBudget, enforceAiDailyBudget, enforceRateLimit, rateLimitActorKey, rateLimitBucketFor } from "./ratelimit";
+import { AI_DAILY_NEURON_CEILING, aiCeilingReached, chargeAiDailyBudget, enforceAiDailyBudget, enforceRateLimit, rateLimitActorKey, rateLimitBucketFor } from "./ratelimit";
 
 describe("rateLimitBucketFor", () => {
   it("classifies expensive POST routes and leaves safe routes unlimited", () => {
@@ -180,18 +180,18 @@ describe("enforceAiDailyBudget", () => {
         }),
       },
     } as any;
-    expect(await enforceAiDailyBudget(post("/chat"), env, "/chat", CORS)).toBeNull();
+    expect(await enforceAiDailyBudget(post("/embed"), env, "/embed", CORS)).toBeNull();
     // The pre-dispatch gate must PEEK (read-only), never consume — that is the
     // whole DoS fix: an inbound request costs nothing until a model actually runs.
     expect(calls).toHaveLength(1);
     expect(calls[0].method).toBe("peek");
-    expect(calls[0].key).toBe("global:ai-neurons-daily");
-    expect(calls[0].args[0]).toBe(40_000); // default cap
+    expect(calls[0].key).toBe("ai-neurons:v1:global");
+    expect(calls[0].args[0]).toBe(300_000); // default cap = AI_DAILY_NEURON_CEILING
   });
 
   it("returns a 429 ai_budget_exhausted when the global budget is spent", async () => {
     const env = { RATE_LIMITER: { getByName: () => ({ peek: async () => ({ success: false, retryAfterSeconds: 3600 }) }) } } as any;
-    const res = await enforceAiDailyBudget(post("/chat"), env, "/chat", CORS);
+    const res = await enforceAiDailyBudget(post("/embed"), env, "/embed", CORS);
     expect(res?.status).toBe(429);
     expect(res?.headers.get("Retry-After")).toBe("3600");
     expect(res?.headers.get("Access-Control-Allow-Origin")).toBe("https://b-social.net");
@@ -199,9 +199,9 @@ describe("enforceAiDailyBudget", () => {
   });
 
   it("fails OPEN — no limiter, a DO error, and non-AI routes all proceed", async () => {
-    expect(await enforceAiDailyBudget(post("/chat"), {} as any, "/chat", CORS)).toBeNull();
+    expect(await enforceAiDailyBudget(post("/embed"), {} as any, "/embed", CORS)).toBeNull();
     const throwEnv = { RATE_LIMITER: { getByName: () => ({ peek: async () => { throw new Error("DO down"); } }) } } as any;
-    expect(await enforceAiDailyBudget(post("/chat"), throwEnv, "/chat", CORS)).toBeNull();
+    expect(await enforceAiDailyBudget(post("/embed"), throwEnv, "/embed", CORS)).toBeNull();
     // /push/send is not a public-AI route, so the AI budget must not touch it.
     const spentEnv = { RATE_LIMITER: { getByName: () => ({ peek: async () => ({ success: false, retryAfterSeconds: 1 }) }) } } as any;
     expect(await enforceAiDailyBudget(post("/push/send"), spentEnv, "/push/send", CORS)).toBeNull();
@@ -230,8 +230,8 @@ describe("chargeAiDailyBudget", () => {
     } as any;
     await chargeAiDailyBudget(env, 250); // e.g. an image generation
     expect(calls).toHaveLength(1);
-    expect(calls[0].key).toBe("global:ai-neurons-daily");
-    expect(calls[0].args[0]).toBe(40_000); // cap
+    expect(calls[0].key).toBe("ai-neurons:v1:global");
+    expect(calls[0].args[0]).toBe(300_000); // cap
     expect(calls[0].args[2]).toBe(250);    // the real cost, not a flat route weight
   });
 
@@ -247,5 +247,28 @@ describe("chargeAiDailyBudget", () => {
     // A DO error is swallowed — budget accounting must never break a chat answer.
     const throwEnv = { RATE_LIMITER: { getByName: () => ({ consume: async () => { throw new Error("DO down"); } }) } } as any;
     await expect(chargeAiDailyBudget(throwEnv, 55)).resolves.toBeUndefined();
+  });
+});
+
+describe("AI_DAILY_NEURON_CEILING / aiCeilingReached", () => {
+  it("is 300000 over a 24h window on key ai-neurons:v1:global", async () => {
+    expect(AI_DAILY_NEURON_CEILING).toBe(300_000);
+    const seen: unknown[][] = []; let key = "";
+    const env = { RATE_LIMITER: { getByName: (k: string) => { key = k; return { peek: async (...a: unknown[]) => { seen.push(a); return { success: true, retryAfterSeconds: 1 }; } }; } } } as any;
+    expect(await aiCeilingReached(env)).toEqual({ reached: false });
+    expect(key).toBe("ai-neurons:v1:global");
+    expect(seen[0]).toEqual([300_000, 86_400_000]);
+  });
+  it("reports reached with retry-after when spent; fails OPEN on error or no store", async () => {
+    const spent = { RATE_LIMITER: { getByName: () => ({ peek: async () => ({ success: false, retryAfterSeconds: 900 }) }) } } as any;
+    expect(await aiCeilingReached(spent)).toEqual({ reached: true, retryAfterSeconds: 900 });
+    const down = { RATE_LIMITER: { getByName: () => ({ peek: async () => { throw new Error("DO down"); } }) } } as any;
+    expect(await aiCeilingReached(down)).toEqual({ reached: false });
+    expect(await aiCeilingReached({} as any)).toEqual({ reached: false });
+  });
+  it("enforceAiDailyBudget no longer hard-429s /chat (chat degrades to the catalogue instead)", async () => {
+    const spent = { RATE_LIMITER: { getByName: () => ({ peek: async () => ({ success: false, retryAfterSeconds: 1 }) }) } } as any;
+    const req = new Request("https://w.test/chat", { method: "POST" });
+    expect(await enforceAiDailyBudget(req, spent, "/chat", {})).toBeNull();
   });
 });

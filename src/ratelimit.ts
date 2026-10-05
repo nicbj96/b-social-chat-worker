@@ -204,8 +204,10 @@ export async function enforceRateLimit(
 // proceeds — the per-actor limiter still applies, and the ceiling is a secondary
 // backstop, not the primary gate.
 const DAY_MS = 86_400_000;
-const DEFAULT_DAILY_NEURON_BUDGET = 40_000; // ~4x the 10k/day free tier: a runaway catch, not a throttle
-const AI_BUDGET_KEY = "global:ai-neurons-daily";
+/** Global kill switch: aggregate neurons per rolling 24h across all actors. */
+export const AI_DAILY_NEURON_CEILING = 300_000;
+const DEFAULT_DAILY_NEURON_BUDGET = AI_DAILY_NEURON_CEILING;
+const AI_BUDGET_KEY = "ai-neurons:v1:global";
 
 export interface AiBudgetEnv extends RateLimitEnv {
   AI_DAILY_NEURON_BUDGET?: string;
@@ -229,6 +231,9 @@ export async function enforceAiDailyBudget(
   corsHeaders: Record<string, string>,
 ): Promise<Response | null> {
   if (request.method !== "POST" || !PUBLIC_AI_ROUTES.has(pathname)) return null;
+  // /chat is NOT hard-429'd here: handleChat checks aiCeilingReached() and
+  // degrades to the deterministic catalogue answer (provider_429) instead.
+  if (pathname === "/chat") return null;
   if (!env.RATE_LIMITER) return null; // no global store — fail open (per-actor limit still guards)
 
   try {
@@ -261,5 +266,21 @@ export async function chargeAiDailyBudget(env: AiBudgetEnv, neurons: number): Pr
     await stub.consume(aiBudgetCap(env), DAY_MS, neurons);
   } catch {
     console.error(JSON.stringify({ event: "ai_daily_budget_charge_failed", neurons }));
+  }
+}
+
+/**
+ * Has the global daily neuron ceiling been spent? Read-only (peek), fail-open:
+ * no store or a store error → not reached. Used by /chat to skip model calls
+ * and answer from the catalogue with the provider_429 degradation.
+ */
+export async function aiCeilingReached(env: AiBudgetEnv): Promise<{ reached: boolean; retryAfterSeconds?: number }> {
+  if (!env.RATE_LIMITER) return { reached: false };
+  try {
+    const decision = await env.RATE_LIMITER.getByName(AI_BUDGET_KEY).peek(aiBudgetCap(env), DAY_MS);
+    return decision.success ? { reached: false } : { reached: true, retryAfterSeconds: decision.retryAfterSeconds };
+  } catch {
+    console.error(JSON.stringify({ event: "ai_daily_budget_unavailable", pathname: "/chat", fallback: "allow" }));
+    return { reached: false };
   }
 }

@@ -1,0 +1,425 @@
+[
+  {
+    "name": "world without implicit GPS",
+    "valid": true,
+    "intent": {
+      "version": 1,
+      "query": "jazz",
+      "queryShareable": false,
+      "kind": "both",
+      "geography": {
+        "kind": "world"
+      },
+      "date": null,
+      "price": null,
+      "sort": "relevance"
+    }
+  },
+  {
+    "name": "explicit empty tags",
+    "valid": true,
+    "intent": {
+      "version": 1,
+      "query": "jazz",
+      "queryShareable": false,
+      "kind": "both",
+      "geography": {
+        "kind": "world"
+      },
+      "date": null,
+      "price": null,
+      "sort": "relevance",
+      "tags": {
+        "selected": [],
+        "expanded": [],
+        "provenance": "selection",
+        "taxonomyVersion": "v1"
+      }
+    }
+  },
+  {
+    "name": "region not city",
+    "valid": true,
+    "intent": {
+      "version": 1,
+      "query": "jazz",
+      "queryShareable": false,
+      "kind": "both",
+      "geography": {
+        "kind": "region",
+        "country": "DK",
+        "region": "DK-81"
+      },
+      "date": null,
+      "price": null,
+      "sort": "relevance"
+    }
+  },
+  {
+    "name": "public radius and all filters",
+    "valid": true,
+    "intent": {
+      "version": 1,
+      "query": "jazz",
+      "queryShareable": true,
+      "kind": "event",
+      "geography": {
+        "kind": "radius",
+        "lat": 56.1,
+        "lng": 10.2,
+        "radiusKm": 25,
+        "source": "manual",
+        "shareable": true
+      },
+      "date": {
+        "from": "2026-10-24T22:00:00.000Z",
+        "to": "2026-10-25T23:00:00.000Z",
+        "timezone": "Europe/Copenhagen"
+      },
+      "price": {
+        "mode": "range",
+        "min": 0,
+        "max": 50,
+        "currency": "CHF",
+        "unknown": "exclude"
+      },
+      "sort": "distance",
+      "tags": {
+        "selected": [
+          "musik"
+        ],
+        "expanded": [
+          "jazz",
+          "musik"
+        ],
+        "provenance": "taxonomy",
+        "taxonomyVersion": "v1"
+      }
+    }
+  },
+  {
+    "name": "version",
+    "valid": false,
+    "intent": {
+      "version": 2,
+      "query": "jazz",
+      "queryShareable": false,
+      "kind": "both",
+      "geography": {
+        "kind": "world"
+      },
+      "date": null,
+      "price": null,
+      "sort": "relevance"
+    }
+  },
+  {
+    "name": "long query",
+    "valid": false,
+    "intent": {
+      "version": 1,
+      "query": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "queryShareable": false,
+      "kind": "both",
+      "geography": {
+        "kind": "world"
+      },
+      "date": null,
+      "price": null,
+      "sort": "relevance"
+    }
+  },
+  {
+    "name": "viewport",
+    "valid": false,
+    "intent": {
+      "version": 1,
+      "query": "jazz",
+      "queryShareable": false,
+      "kind": "both",
+      "geography": {
+        "kind": "world"
+      },
+      "date": null,
+      "price": null,
+      "sort": "relevance",
+      "viewport": {
+        "north": 90
+      }
+    }
+  },
+  {
+    "name": "cursor in intent",
+    "valid": false,
+    "intent": {
+      "version": 1,
+      "query": "jazz",
+      "queryShareable": false,
+      "kind": "both",
+      "geography": {
+        "kind": "world"
+      },
+      "date": null,
+      "price": null,
+      "sort": "relevance",
+      "cursor": "x"
+    }
+  },
+  {
+    "name": "bad kind",
+    "valid": false,
+    "intent": {
+      "version": 1,
+      "query": "jazz",
+      "queryShareable": false,
+      "kind": "events",
+      "geography": {
+        "kind": "world"
+      },
+      "date": null,
+      "price": null,
+      "sort": "relevance"
+    }
+  },
+  {
+    "name": "invalid latitude",
+    "valid": false,
+    "intent": {
+      "version": 1,
+      "query": "jazz",
+      "queryShareable": false,
+      "kind": "both",
+      "geography": {
+        "kind": "radius",
+        "lat": 91,
+        "lng": 10,
+        "radiusKm": 25,
+        "source": "gps",
+        "shareable": false
+      },
+      "date": null,
+      "price": null,
+      "sort": "relevance"
+    }
+  },
+  {
+    "name": "zero radius",
+    "valid": false,
+    "intent": {
+      "version": 1,
+      "query": "jazz",
+      "queryShareable": false,
+      "kind": "both",
+      "geography": {
+        "kind": "radius",
+        "lat": 56,
+        "lng": 10,
+        "radiusKm": 0,
+        "source": "gps",
+        "shareable": false
+      },
+      "date": null,
+      "price": null,
+      "sort": "relevance"
+    }
+  },
+  {
+    "name": "huge radius",
+    "valid": false,
+    "intent": {
+      "version": 1,
+      "query": "jazz",
+      "queryShareable": false,
+      "kind": "both",
+      "geography": {
+        "kind": "radius",
+        "lat": 56,
+        "lng": 10,
+        "radiusKm": 2001,
+        "source": "gps",
+        "shareable": false
+      },
+      "date": null,
+      "price": null,
+      "sort": "relevance"
+    }
+  },
+  {
+    "name": "private GPS marked public",
+    "valid": false,
+    "intent": {
+      "version": 1,
+      "query": "jazz",
+      "queryShareable": false,
+      "kind": "both",
+      "geography": {
+        "kind": "radius",
+        "lat": 56,
+        "lng": 10,
+        "radiusKm": 25,
+        "source": "gps",
+        "shareable": true
+      },
+      "date": null,
+      "price": null,
+      "sort": "relevance"
+    }
+  },
+  {
+    "name": "country with cached GPS",
+    "valid": false,
+    "intent": {
+      "version": 1,
+      "query": "jazz",
+      "queryShareable": false,
+      "kind": "both",
+      "geography": {
+        "kind": "country",
+        "country": "DK",
+        "lat": 56
+      },
+      "date": null,
+      "price": null,
+      "sort": "relevance"
+    }
+  },
+  {
+    "name": "invalid zone",
+    "valid": false,
+    "intent": {
+      "version": 1,
+      "query": "jazz",
+      "queryShareable": false,
+      "kind": "both",
+      "geography": {
+        "kind": "world"
+      },
+      "date": {
+        "from": "2026-10-25T00:00:00Z",
+        "to": "2026-10-26T00:00:00Z",
+        "timezone": "Mars/Olympus"
+      },
+      "price": null,
+      "sort": "relevance"
+    }
+  },
+  {
+    "name": "reversed window",
+    "valid": false,
+    "intent": {
+      "version": 1,
+      "query": "jazz",
+      "queryShareable": false,
+      "kind": "both",
+      "geography": {
+        "kind": "world"
+      },
+      "date": {
+        "from": "2026-10-26T00:00:00Z",
+        "to": "2026-10-25T00:00:00Z",
+        "timezone": "Europe/Copenhagen"
+      },
+      "price": null,
+      "sort": "relevance"
+    }
+  },
+  {
+    "name": "currency missing",
+    "valid": false,
+    "intent": {
+      "version": 1,
+      "query": "jazz",
+      "queryShareable": false,
+      "kind": "both",
+      "geography": {
+        "kind": "world"
+      },
+      "date": null,
+      "price": {
+        "mode": "range",
+        "min": 0,
+        "max": 50,
+        "unknown": "exclude"
+      },
+      "sort": "relevance"
+    }
+  },
+  {
+    "name": "bad currency",
+    "valid": false,
+    "intent": {
+      "version": 1,
+      "query": "jazz",
+      "queryShareable": false,
+      "kind": "both",
+      "geography": {
+        "kind": "world"
+      },
+      "date": null,
+      "price": {
+        "mode": "range",
+        "min": 0,
+        "max": 50,
+        "currency": "XYZ",
+        "unknown": "exclude"
+      },
+      "sort": "relevance"
+    }
+  },
+  {
+    "name": "long tags",
+    "valid": false,
+    "intent": {
+      "version": 1,
+      "query": "jazz",
+      "queryShareable": false,
+      "kind": "both",
+      "geography": {
+        "kind": "world"
+      },
+      "date": null,
+      "price": null,
+      "sort": "relevance",
+      "tags": {
+        "selected": [
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music",
+          "music"
+        ],
+        "expanded": [],
+        "provenance": "selection",
+        "taxonomyVersion": "v1"
+      }
+    }
+  }
+]
