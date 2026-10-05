@@ -19,13 +19,14 @@
 
 /** Rough neurons per call, by model. Order-of-magnitude, not exact. */
 const NEURONS_PER_CALL: Record<string, number> = {
-  "@cf/meta/llama-4-scout-17b-16e-instruct": 55, // the main chat model, per turn
+  "@cf/meta/llama-4-scout-17b-16e-instruct": 125, // the main chat model, per call (measured ~123, CF analytics 2026-10-05)
+  "@cf/moonshotai/kimi-k2.6": 105, // measured 54,690 neurons / 530 calls (CF analytics 2026-10-05)
   "@cf/baai/bge-m3": 3, // embeddings — cheap, but called per search
   "@cf/openai/whisper": 40, // transcription
   "@cf/black-forest-labs/flux-1-schnell": 250, // image generation — the expensive one
   "@cf/llava-hf/llava-1.5-7b-hf": 60, // vision
 };
-const DEFAULT_NEURONS = 30; // an unrecognised model still counts as something
+const DEFAULT_NEURONS = 125; // an unrecognised model still counts as something
 
 // Per-isolate counters. Same tradeoff as the ingest request counter: safe
 // because a Worker isolate serialises its own requests, and it degrades to an

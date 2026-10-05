@@ -78,3 +78,11 @@ describe("aiCost", () => {
     expect(snap.estimated_neurons).toBeGreaterThan(0);
   });
 });
+
+describe("neuronsFor calibration (CF analytics 2026-10-05)", () => {
+  it("uses measured per-call neurons and a non-underestimating default", () => {
+    expect(neuronsFor("@cf/meta/llama-4-scout-17b-16e-instruct")).toBe(125);
+    expect(neuronsFor("@cf/moonshotai/kimi-k2.6")).toBe(105);
+    expect(neuronsFor("@cf/unknown/model")).toBe(125);
+  });
+});
