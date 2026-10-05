@@ -1293,6 +1293,7 @@ async function directDiscoveryFallback(
   const supabase = createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY);
   let places: any[] = [];
   let events: any[] = [];
+  let failed = false;
 
   if (intent.kind === "places" || intent.kind === "both") {
     // H1 — the SAME gate the /search path uses, which is the point of putting
@@ -1304,6 +1305,7 @@ async function directDiscoveryFallback(
         city: intent.city,
         category: intent.placeCategory,
       });
+      if (result.error) failed = true;
       places = result.results || [];
     }
   }
@@ -1315,7 +1317,18 @@ async function directDiscoveryFallback(
       category: useSpecificTag ? undefined : intent.eventCategory,
       tags: useSpecificTag ? intent.queryTag : undefined,
     });
+    if (result.error) failed = true;
     events = result.results || [];
+  }
+
+  if (failed && places.length === 0 && events.length === 0) {
+    return jsonResponse({
+      reply: language === "en"
+        ? "I couldn't search the catalogue right now. Please try again in a moment."
+        : "Jeg kunne ikke søge i kataloget lige nu. Prøv igen om lidt.",
+      tool_calls_made: ["direct_discovery_fallback"], place_ids: [], event_ids: [],
+      suggested_tag_slugs: [], degraded: true, retrieval_error: true,
+    });
   }
 
   return jsonResponse(formatFallbackReply(intent, places, events, language));
