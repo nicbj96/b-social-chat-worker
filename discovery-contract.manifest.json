@@ -2,7 +2,7 @@
   "contract_version": 1,
   "canonical": "b-social-pages/source/src/lib/searchIntent.ts",
   "sha256": {
-    "schema": "b759111092170f6979d83c4415398642edf12f55b3ddc1ea861b17118b020ff7",
+    "schema": "e6f86383add8fa97dc5c2a5a5be92a154c22b93a70a9172b9e6faa64c80d6cd9",
     "fixtures": "1541107b7af74b5ecf2059e65ce5bb5e5674f53112e982cbd695ca1e58beb0d9",
     "retrieval": "410a8d2b388b39152f2570b14c20da6803d8cb48b52b9256c8f02306d167fb4d"
   }
