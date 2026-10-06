@@ -45,7 +45,7 @@ function number(v: unknown, min: number, max: number): number {
 function bool(v: unknown): boolean { if (typeof v !== "boolean") return fail(); return v; }
 function slugs(v: unknown, max: number): string[] {
   if (!Array.isArray(v) || v.length > max) return fail();
-  return [...new Set(v.map(s => text(s,80,/^[a-z0-9]+(?:-[a-z0-9]+)*$/)))].sort();
+  return [...new Set(v.map(s => text(s,80,/^[a-z0-9æøåéü]+(?:-[a-z0-9æøåéü]+)*$/)))].sort();
 }
 function instant(v: unknown): string {
   const s = text(v,32,/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/);
