@@ -201,7 +201,7 @@ const DANISH_NOTICES: Record<DegradationReason, string> = {
   provider_timeout: "AI-tjenesten svarede ikke i tid. Svaret her er hentet direkte fra B-Socials katalog.",
   provider_error: "AI-tjenesten svarer ikke lige nu. Svaret her er hentet direkte fra B-Socials katalog.",
   turn_deadline_exceeded: "Tidsgrænsen for svaret udløb. Her er det, der nåede at blive hentet — intet er gættet.",
-  session_budget_exhausted: "Du har brugt dine 5 gratis AI-søgninger i dag. Få ubegrænset AI-søgning med B-Social Plus — eller prøv igen i morgen. Almindelig søgning virker som altid.",
+  session_budget_exhausted: "Du har brugt dine 5 gratis AI-søgninger i dag. Få 200 AI-søgninger om dagen med B-Social Plus — eller prøv igen i morgen. Almindelig søgning virker som altid.",
   plus_fair_use_exhausted: "Du har nået dagens fair-use-grænse for AI. Prøv igen i morgen.",
 };
 
