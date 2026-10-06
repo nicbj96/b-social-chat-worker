@@ -131,6 +131,7 @@ describe("budget/deadline — session budget ledger", () => {
     expect(body.error).toBe("session_budget_exhausted");
     // Danish, actionable message:
     expect(body.notice).toContain("5 gratis AI-søgninger");
+    expect(body.notice).toContain("39 kr/md");
     expect(aiRun).not.toHaveBeenCalled();
   });
 
