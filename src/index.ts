@@ -1,4 +1,5 @@
 import { eventPriceLabel } from "./event-price";
+import { normalizeToolCalls } from "./tool-calls";
 import { parseSearchIntent } from "./discovery-contract";
 import * as Sentry from "@sentry/cloudflare";
 import { cityToBBox } from "./city-bbox";
@@ -1737,6 +1738,12 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
     let rowsCapped = false;
 
     // If the model wants to call tools, execute them
+    // Workers AI returns tool calls either OpenAI-style ({function:{name,arguments}})
+    // or flat ({name, arguments}) depending on model/version. Normalise once so
+    // every consumer below can rely on tc.function.name.
+    if (Array.isArray(aiResponse?.tool_calls)) {
+      aiResponse.tool_calls = normalizeToolCalls(aiResponse.tool_calls);
+    }
     if (aiResponse.tool_calls && aiResponse.tool_calls.length > 0) {
       const supabase = createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY);
 
@@ -2364,3 +2371,4 @@ export const __test = {
   MAX_MESSAGE_CHARS,
   MAX_MESSAGES,
 };
+
