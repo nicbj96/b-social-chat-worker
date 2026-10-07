@@ -67,7 +67,24 @@ export async function runAiCounted(
   callsByModel[model] = (callsByModel[model] ?? 0) + 1;
   // Telemetry must never be able to break an actual AI call.
   try { usageReporter?.(model, neuronsFor(model)); } catch { /* ignore */ }
-  return ai.run(model, input);
+  try {
+    return await ai.run(model, input);
+  } catch (err) {
+    // Workers AI capacity/internal blips (3040, 4009, 5xx) are transient and
+    // usually clear within a second: retry ONCE before falling back.
+    if (!isTransientAiError(err)) throw err;
+    await new Promise((r) => setTimeout(r, 400));
+    callsByModel[model] = (callsByModel[model] ?? 0) + 1;
+    try { usageReporter?.(model, neuronsFor(model)); } catch { /* ignore */ }
+    return ai.run(model, input);
+  }
+}
+
+/** Leading Workers AI error code that is safe to retry once. Quota (3036/429) is NOT. */
+export function isTransientAiError(err: unknown): boolean {
+  const msg = String(err instanceof Error ? err.message : err).trim();
+  const code = /^(\d{3,4})\b/.exec(msg)?.[1];
+  return code === "3040" || code === "4009" || code === "3043" || (!!code && code.length === 3 && code.startsWith("5"));
 }
 
 export interface AiCostSnapshot {
