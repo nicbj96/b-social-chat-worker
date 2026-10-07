@@ -2300,6 +2300,14 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
     // back in `details` from a single forced error. The log keeps the detail;
     // the caller gets the sentence.
     console.error("Chat error:", err);
+    // Structured, bounded detail so the cause is visible in Workers Logs (the
+    // bare Error above serialises to a stack only). Never sent to the caller.
+    console.error(JSON.stringify({
+      event: "chat_turn_failed",
+      name: err?.name ?? null,
+      code: err?.code ?? null,
+      detail: String(err instanceof Error ? err.message : err).replace(/eyJ[\w.-]+/g, "[jwt]").slice(0, 140),
+    }));
 
     // The MODEL failing is not the same as having no answer. Workers AI has a
     // daily neuron allowance, models have outages, and calls time out -- none
