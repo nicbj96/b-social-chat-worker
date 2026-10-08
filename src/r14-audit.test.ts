@@ -331,3 +331,29 @@ describe("r24g", () => {
     expect(r.reply).not.toContain("Supercykelsti");
   });
 });
+
+import { topicTagList } from "./discovery-fallback";
+describe("r25", () => {
+  it("dans does not match dansk", () => {
+    expect(topicWordHit({ title: "Forbudte stemmer", description: "en dansk aften" }, "dans")).toBe(false);
+    expect(topicWordHit({ title: "Familiedans i Aarhus" }, "dans")).toBe(true);
+  });
+  it("comedy tags include stand-up", () => { expect(topicTagList(["comedy"])).toContain("stand-up"); });
+  it("comedy hits stand-up row", () => { expect(topicWordHit({ title: "Ira Sylvester: Live Stand-Up Show", interest_tags: ["teater", "stand-up"] }, "comedy")).toBe(true); });
+  it("markeder is a topic", () => { expect(topicWordsOf("markeder i weekenden")).toContain("marked"); });
+  it("bar København and bare genre are discovery", () => {
+    expect(isDiscoverySeekingMessage("bar København")).toBe(true);
+    expect(isDiscoverySeekingMessage("techno")).toBe(true);
+  });
+  it("price follow-up sets priceAsked", () => {
+    const t = resolveTurnDiscovery(["stand-up København i aften", "hvad koster billetterne?"], undefined, new Date("2026-10-08T10:00:00Z"));
+    expect(t.intent.priceAsked).toBe(true);
+  });
+  it("relaxed date not labelled i aften", () => {
+    const r = formatFallbackReply({ kind: "events", city: "København", topicWords: ["stand-up"], dateWindow: { from: "2026-10-08T15:00:00Z", to: "2026-10-08T22:00:00Z", label: "i aften" }, limit: 4 } as any, [], [{ id: "1", title: "Talentshow", location: "Knock Knock, København", date: "fredag" } as any], "da", ["date"] as any);
+    expect(r.reply).not.toContain("(i aften)");
+  });
+  it("places empty uses human words", () => {
+    expect(honestEmptyReply({ kind: "places", city: "København", queryTag: "mad_drikke", limit: 4 } as any, null, "da")).not.toContain("mad_drikke");
+  });
+});
