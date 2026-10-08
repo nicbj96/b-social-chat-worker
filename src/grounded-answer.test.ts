@@ -108,3 +108,27 @@ describe("groundModelReply — adversarial model text", () => {
     expect(out.reply).not.toContain("Pris ukendt");
   });
 });
+
+describe("groundModelReply — Danish date/time prose", () => {
+  const ev = (id: string, title: string, date: string): GroundedSource => ({
+    id, kind: "event", url: `/event/${id}`, verified_fields: { id, title, date }, retrieved_at: "2026-10-04T12:00:00Z", source_updated_at: null,
+  });
+  const srcs = [
+    ev("11111111-1111-4111-8111-111111111111", "BØLLE", "2026-10-10T21:00:00Z"),
+    ev("22222222-2222-4222-8222-222222222222", "NOLA JAZZ JAM", "2026-10-13T20:00:00Z"),
+  ];
+  it("keeps a correct local-time multi-event list intact (no mid-date splits)", () => {
+    const text = "Her er nogle jazzkoncerter:\n\n* BØLLE på Drop inn den 10. oktober kl. 23.00 - popjazz.\n* NOLA JAZZ JAM den 13. oktober kl. 22.00 - New Orleans.";
+    const out = groundModelReply(text, srcs, { lang: "da" });
+    expect(out.grounding).toBe("verified");
+    expect(out.reply).toBe(text);
+  });
+  it("drops only the wrong line and keeps the rest readable", () => {
+    const text = "Her er nogle jazzkoncerter:\n* BØLLE den 10. oktober kl. 23.00.\n* NOLA JAZZ JAM den 13. oktober kl. 07.00.";
+    const out = groundModelReply(text, srcs, { lang: "da" });
+    expect(out.grounding).toBe("corrected");
+    expect(out.reply).toContain("* BØLLE den 10. oktober kl. 23.00.");
+    expect(out.reply).not.toContain("kl. 07.00");
+    expect(out.reply).not.toMatch(/den 10\.\noktober/);
+  });
+});
