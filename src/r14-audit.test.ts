@@ -70,3 +70,13 @@ describe("L-B: outro after corrected bullets", () => {
     expect(r.reply.indexOf("Real Gig")).toBeLessThan(r.reply.indexOf("Would you like"));
   });
 });
+
+describe("r16 M1: bullet titles with full stops", () => {
+  it("a bullet with a dotted title is one claim and survives intact", () => {
+    const src: any[] = [{ kind: "event", id: "e1", verified_fields: { title: "AI & Digital Confidence. Futurists stronger together. // Networking - Career Club DK", date: "2026-10-08T15:30:00Z", date_raw: "2026-10-08T15:30:00Z" } }];
+    const text = "Here is one:\n\n* **AI & Digital Confidence. Futurists stronger together. // Networking - Career Club DK** at Spaces, København, 5:30 PM\n\nWant more?";
+    const r = groundModelReply(text, src as any, { lang: "en" });
+    expect(r.reply).toContain("Futurists stronger together");
+    expect(r.reply).not.toMatch(/\*\*AI & Digital Confidence\.\s*$/m);
+  });
+});
