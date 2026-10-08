@@ -790,7 +790,9 @@ export function namedGenre(message: string): string | null {
 export function rowIsGenre(row: Record<string, any>, genre: string): boolean {
   const tags = Array.isArray(row.interest_tags) ? row.interest_tags.join(" ") : "";
   const hay = ` ${String(row.title ?? "")} ${String(row.description ?? "")} ${tags} `.toLowerCase();
-  return (GENRES[genre] ?? [genre]).some(w => new RegExp(`(?<![\\p{L}])${w.replace(/[-\s]/g, "[-\\s]?")}(?![\\p{L}])`, "u").test(hay));
+  // Danish compounds ("jazzkoncert", "rockmusik", "jazzmusikkens") keep the
+  // genre as a prefix; short words (pop, rap, dj, house) need a word end.
+  return (GENRES[genre] ?? [genre]).some(w => new RegExp(`(?<![\\p{L}])${w.replace(/[-\s]/g, "[-\\s]?")}${w.length >= 4 && w !== "house" ? "" : "(?![\\p{L}])"}`, "u").test(hay));
 }
 /** Genre named anywhere in the follow-up chain (latest wins). */
 export function chainGenre(userTexts: string[]): string | null {
