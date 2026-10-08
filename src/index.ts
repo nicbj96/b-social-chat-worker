@@ -1825,6 +1825,13 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
               }
               const fnName = toolCall.function.name;
               const fnArgs = parseToolArgs(toolCall.function?.arguments);
+              // The model often drops the city ("jazz i København" → semantic_search
+              // without city → Zürich/Montreal rows). The reader named it, so the
+              // worker fills it in from the latest user message before searching.
+              if (fnArgs && !fnArgs.city && (fnName === "semantic_search" || fnName === "search_events" || fnName === "search_places")) {
+                const namedCity = inferDiscoveryIntent(latestUserMessage(userMessages)).city;
+                if (namedCity) fnArgs.city = namedCity;
+              }
 
               let result: any;
               if (!fnArgs) {

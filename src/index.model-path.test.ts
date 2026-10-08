@@ -67,6 +67,19 @@ describe("/chat model path — proposal, grounding, budget", () => {
     expect(body.budget).toEqual({ model_calls: 2, embedding_calls: 0, caps: { model_calls: 2, embedding_calls: 1 } });
   });
 
+  it("fills a city the model dropped from the reader's message before semantic_search", async () => {
+    const net = netStub(); vi.stubGlobal("fetch", net);
+    const ai = aiStub([
+      { tool_calls: [{ id: "t1", function: { name: "semantic_search", arguments: JSON.stringify({ query: "jazz", kind: "events" }) } }] },
+      { response: "Her er jazz." },
+    ]);
+    await chat(envWith(ai, net), { messages: [{ role: "user", content: "find jazz i København" }], current_intent: currentIntent });
+    const rpc = net.mock.calls.find((c: any[]) => String(c[0]).includes("/rpc/match_events"));
+    expect(rpc).toBeTruthy();
+    const body = JSON.parse(String((rpc as any[])[1]?.body ?? "{}"));
+    expect(body.filter_bbox_n).toBeTypeOf("number");
+  });
+
   it("grounds the normal model reply: contradictory price corrected to the verified field with currency", async () => {
     const net = netStub(); vi.stubGlobal("fetch", net);
     const ai = aiStub([
