@@ -168,6 +168,8 @@ export function topicWordsOf(message: string): string[] {
   const hits = TOPIC_WORDS.filter(w => new RegExp(COMPOUND_OK.has(w) ? w : `(?<!\\p{L})${w}`, "u").test(low));
   // "børneteater" is narrower than "teater": comedy clubs tagged teater are not it.
   if (/(?<!\p{L})markede?r?(?!\p{L})/u.test(low) && !hits.includes("marked")) hits.push("marked");
+  if (/(?<!\p{L})(?:caf[ée](?:er|en|erne|s)?|kaffebar\p{L}*|coffee\s*shops?)(?!\p{L})/u.test(low)) hits.push("café");
+  if (/(?<!\p{L})(?:bar|barer|baren|bars|pub|pubs|værtshus\p{L}*|cocktailbar\p{L}*|vinbar\p{L}*)(?!\p{L})/u.test(low)) hits.push("bar");
   return /b[øo]rne(?:teater|forestilling)/u.test(low) ? ["børneteater", ...hits.filter(w => w !== "teater")] : hits;
 }
 
@@ -850,6 +852,8 @@ const TOPIC_SYNONYMS: Record<string, string[]> = {
   comedy: ["stand-up", "standup", "comedy", "komik"],
   teater: ["teater", "theatre", "theater", "forestilling"],
   legeplads: ["legeplads", "playground", "legepark"],
+  "café": ["café", "cafe", "kaffebar", "coffee", "kaffe"],
+  bar: ["bar", "pub", "værtshus", "cocktail", "vinbar", "bodega"],
   museum: ["museum", "museer", "museet", "museums"],
   dans: ["dans", "danse", "dansen", "danser", "dance", "folkedans", "familiedans", "salsa", "tango", "swing", "ballet"],
   film: ["film", "filmaften", "biograf", "cinema", "kino"],
