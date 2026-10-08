@@ -357,3 +357,13 @@ describe("r25", () => {
     expect(honestEmptyReply({ kind: "places", city: "København", queryTag: "mad_drikke", limit: 4 } as any, null, "da")).not.toContain("mad_drikke");
   });
 });
+
+describe("r25b", () => {
+  it("café/bar topics", () => {
+    expect(topicWordsOf("caféer i København")).toContain("café");
+    expect(topicWordsOf("bar København")).toContain("bar");
+    expect(topicWordsOf("Barcelona")).not.toContain("bar");
+    expect(topicWordHit({ name: "Badekompagniet", tags: ["sauna"] }, "bar")).toBe(false);
+    expect(topicWordHit({ name: "Restaurant Koefoed", tags: ["restaurant"] }, "café")).toBe(false);
+  });
+});
