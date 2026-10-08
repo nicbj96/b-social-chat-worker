@@ -152,3 +152,18 @@ describe("/chat model path — proposal, grounding, budget", () => {
     expect(body.reply.toLowerCase()).not.toContain("ingen resultater");
   });
 });
+
+describe("r20 filter words as tags", () => {
+  it("tags 'gratis' becomes free=true, not a tag filter", async () => {
+    const net = netStub(); vi.stubGlobal("fetch", net);
+    const ai = aiStub([
+      { tool_calls: [{ id: "t1", function: { name: "search_events", arguments: JSON.stringify({ city: "København", category: "musik", tags: "gratis" }) } }] },
+      { response: "Her er gratis koncerter." },
+    ]);
+    await chat(envWith(ai, net), { messages: [{ role: "user", content: "gratis koncerter KBH" }], current_intent: currentIntent });
+    const rest = net.mock.calls.map((c: any[]) => decodeURIComponent(String(c[0]))).filter((u: string) => u.includes("/rest/v1/events"));
+    expect(rest.length).toBeGreaterThan(0);
+    expect(rest.every((u: string) => !u.includes("gratis"))).toBe(true);
+    expect(rest.some((u: string) => u.includes("price=eq.0"))).toBe(true);
+  });
+});

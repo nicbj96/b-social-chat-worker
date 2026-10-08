@@ -1847,6 +1847,13 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
               }
               // The reader's date window and free filter are facts about the
               // question, not suggestions: the model's own dates never widen them.
+              // "gratis"/"free"/"billig" are price filters, not catalogue tags: as
+              // tags they match nothing and turned "gratis koncerter KBH" empty.
+              if (fnArgs && typeof fnArgs.tags === "string") {
+                const kept = fnArgs.tags.split(",").map((t: string) => t.trim()).filter((t: string) => t && !/^(gratis|free|billig|cheap|kbh|københavn|copenhagen|i dag|today|weekend)$/i.test(t));
+                if (/(^|,)\s*(gratis|free)\s*(,|$)/i.test(fnArgs.tags)) fnArgs.free = true;
+                if (kept.length) fnArgs.tags = kept.join(","); else delete fnArgs.tags;
+              }
               if (fnArgs && fnName === "search_events") {
                 const ti = turnDiscovery(userMessages, ctx).intent;
                 if (ti.dateWindow) { fnArgs.date_from = ti.dateWindow.from; fnArgs.date_to = ti.dateWindow.to; delete fnArgs.timezone; }
