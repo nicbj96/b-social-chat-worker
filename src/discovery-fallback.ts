@@ -55,7 +55,7 @@ const DANISH_WORDS =
   /\b(hvad|hvor|hvornår|hvilke|jeg|ikke|noget|sker|kan|vil|skal|der|det|den|og|på|til|er|en|et|som|har|gerne|lidt|mig|dig|min|din|vise|find(?:e)?r|steder|aften|weekenden|nær|tak|hej)\b/giu;
 
 const ENGLISH_WORDS =
-  /\b(the|is|are|was|what|where|when|how|why|you|your|yours|me|my|mine|want|any|good|some|something|anything|there|their|give|ideas|happening|free|help|hello|hi|hey|please|show|near|nearby|around|this|these|those|tonight|tomorrow|today|weekend|looking|recommend|suggest|can|could|would|should|do|does|did|going|go|out|about|thanks|thank|in|of|on|from|with)\b/giu;
+  /\b(the|kids|activities|sunday|monday|tuesday|wednesday|thursday|friday|saturday|concerts?|music|events?|for|in|on|is|are|was|what|where|when|how|why|you|your|yours|me|my|mine|want|any|good|some|something|anything|there|their|give|ideas|happening|free|help|hello|hi|hey|please|show|near|nearby|around|this|these|those|tonight|tomorrow|today|weekend|looking|recommend|suggest|can|could|would|should|do|does|did|going|go|out|about|thanks|thank|in|of|on|from|with)\b/giu;
 
 export function inferResponseLanguage(message: string): ResponseLanguage {
   const text = String(message || "").toLocaleLowerCase("da-DK");

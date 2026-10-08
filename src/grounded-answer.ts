@@ -232,6 +232,11 @@ export function groundModelReply(
   // Template placeholders ("[jazz_steder København]") and empty checkboxes are
   // model scaffolding, never reader text.
   modelText = modelText.replace(/\[[\p{L}_]+(?:\s+[\p{L}]+)*_[\p{L}_]*(?:\s+[\p{L}]+)*\]/gu, "").replace(/^\s*[-*]\s*\[\s?\]\s*/gmu, "- ");
+  // "Her er nogle jazz-events: … Ingen resultater fundet." — an empty result
+  // must not open with a claim that a list follows.
+  if (sources.length === 0 && /(ingen\s+(?:resultater|events?)|no\s+results|found\s+no|fandt\s+ingen)/i.test(modelText)) {
+    modelText = modelText.split("\n").filter(l => !/^\s*(her\s+er\s+nogle|here\s+are\s+some)\b/i.test(l)).join("\n");
+  }
   if (!modelText.trim()) {
     return { reply: sources.length ? renderGroundedFacts(sources, da ? "da" : "en").join("\n") : "", grounding: sources.length ? "verified" : "flagged", corrections: [] };
   }
