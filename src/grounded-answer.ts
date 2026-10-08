@@ -210,6 +210,7 @@ export function groundModelReply(
     const sep = parts[i + 1] ?? "";
     const violation = sentence.trim() ? sentenceViolates(sentence, sources, da ? "da" : "en") : null;
     if (!violation) { kept.push(sentence + sep); continue; }
+    console.log(JSON.stringify({ event: "grounding_removed", violation, sentence: sentence.trim().slice(0, 160) }));
     if (sep.includes("\n")) kept.push("\n");
     if (!corrections.some(c => c.startsWith(violation))) {
       corrections.push(violation === "invented_entity"
