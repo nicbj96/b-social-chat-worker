@@ -730,6 +730,9 @@ export function resolveTurnDiscovery(userTexts: string[], contextCity?: string, 
         const mid = inferDiscoveryIntent(userTexts[j], contextCity, now);
         if (mid.city && mid.city !== contextCity) merged.city = mid.city;
         if (mid.dateWindow) merged.dateWindow = mid.dateWindow;
+        // "kun børn" mid-chain narrows the category for later follow-ups
+        // ("… → kun børn → og i Aarhus?" is still children's events).
+        if (mid.eventCategory) { merged.eventCategory = mid.eventCategory; merged.queryTag = mid.queryTag; if (merged.kind === "places") merged.kind = "events"; }
       }
       if (own.city) merged.city = own.city;
       if (own.dateWindow) merged.dateWindow = own.dateWindow;
