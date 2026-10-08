@@ -24,13 +24,13 @@ export type DateWindow = {
 type Ymd = { y: number; m: number; d: number };
 
 const WEEKDAYS: Array<{ re: RegExp; dow: number; label: string }> = [
-  { re: /(?<!\p{L})s[øo]ndag\p{L}*/iu, dow: 0, label: "søndag" },
-  { re: /(?<!\p{L})mandag\p{L}*/iu, dow: 1, label: "mandag" },
-  { re: /(?<!\p{L})tirsdag\p{L}*/iu, dow: 2, label: "tirsdag" },
-  { re: /(?<!\p{L})onsdag\p{L}*/iu, dow: 3, label: "onsdag" },
-  { re: /(?<!\p{L})torsdag\p{L}*/iu, dow: 4, label: "torsdag" },
-  { re: /(?<!\p{L})fredag\p{L}*/iu, dow: 5, label: "fredag" },
-  { re: /(?<!\p{L})l[øo]rdag\p{L}*/iu, dow: 6, label: "lørdag" },
+  { re: /(?<!\p{L})(?:s[øo]ndag\p{L}*|sunday)/iu, dow: 0, label: "søndag" },
+  { re: /(?<!\p{L})(?:mandag\p{L}*|monday)/iu, dow: 1, label: "mandag" },
+  { re: /(?<!\p{L})(?:tirsdag\p{L}*|tuesday)/iu, dow: 2, label: "tirsdag" },
+  { re: /(?<!\p{L})(?:onsdag\p{L}*|wednesday)/iu, dow: 3, label: "onsdag" },
+  { re: /(?<!\p{L})(?:torsdag\p{L}*|thursday)/iu, dow: 4, label: "torsdag" },
+  { re: /(?<!\p{L})(?:fredag\p{L}*|friday)/iu, dow: 5, label: "fredag" },
+  { re: /(?<!\p{L})(?:l[øo]rdag\p{L}*|saturday)/iu, dow: 6, label: "lørdag" },
 ];
 
 /** Offset (ms, local minus UTC) of LOCAL_TZ at the given instant. */

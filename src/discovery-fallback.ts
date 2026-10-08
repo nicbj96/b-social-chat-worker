@@ -146,7 +146,7 @@ const CATEGORY_RULES = [
   // actually says "jazz" — that is the branch below this list.
   { test: /\b(jazz|koncert|musik|festival)\w*/iu, placeCategory: "musik-lyd", eventCategory: "musik", tag: "musik" },
   { test: /\b(natur|outdoor|skov|park|vandring|hundeskov)\w*/iu, placeCategory: "natur-outdoor", eventCategory: "natur", tag: "natur" },
-  { test: /\b(børn|barn|familie)\w*/iu, placeCategory: "børn-familie", eventCategory: "familie", tag: "familie" },
+  { test: /\b(børn|barn|familie|kids?|children|family)\w*/iu, placeCategory: "børn-familie", eventCategory: "familie", tag: "familie" },
   // "musee" as well as "museum" -- same Danish stem change as the place signal
   // above. Without it "museer i Roskilde" matched no CATEGORY either, so the
   // reply was correctly located and still returned a festival and a mountain
@@ -310,8 +310,8 @@ export function isDiscoverySeekingMessage(message: string): boolean {
   const text = String(message || "").trim();
   if (!text) return false;
   const hasVerb = /\b(find|vis|søg|anbefal|show|recommend|search|looking for|hvad sker|hvad kan|er der)\b/iu.test(text);
-  const hasNoun = /\b(event|events|arrangement|sted|steder|koncert|festival|jazz|aktivitet|aktiviteter|museum|restaurant|café|cafe|park|skov|turnering)\w*\b/iu.test(text);
-  const hasCity = /\b(kbh|cph|københavn|copenhagen|aarhus|århus|aalborg|ålborg|odense|malmö|malmo|frederikshavn|skagen|thisted)\b/iu.test(text);
+  const hasNoun = /\b(event|events|activit|arrangement|sted|steder|koncert|festival|jazz|aktivitet|aktiviteter|museum|restaurant|café|cafe|park|skov|turnering)\w*\b/iu.test(text);
+  const hasCity = /\b(kbh|cph|københavn|copenhagen|aarhus|århus|aalborg|ålborg|odense|roskilde|esbjerg|vejle|kolding|horsens|randers|malmö|malmo|frederikshavn|skagen|thisted)\b/iu.test(text);
   // "noget for børn på søndag i Aarhus" has no verb and no noun from the list
   // above, only a city, a category word and a date. That is still a discovery
   // question; treating it as chit-chat answered it with "Det kan jeg ikke svare
@@ -765,4 +765,35 @@ export function clarifyDiscoveryReply(lang: "da" | "en") {
       : "Hvilken by, og hvad slags oplevelse leder du efter? Så finder jeg det i kataloget.",
     tool_calls_made: [], place_ids: [], event_ids: [], suggested_tag_slugs: [],
   };
+}
+
+/** Named music genres and the words that prove a row is that genre. */
+export const GENRES: Record<string, string[]> = {
+  jazz: ["jazz"],
+  elektronisk: ["elektronisk", "electronic", "electronica", "techno", "house", "dj", "rave", "elektro"],
+  rock: ["rock"],
+  metal: ["metal"],
+  hiphop: ["hiphop", "hip-hop", "hip hop", "rap"],
+  klassisk: ["klassisk", "classical", "symfoni", "orkester", "kammermusik"],
+  pop: ["pop"],
+};
+export function namedGenre(message: string): string | null {
+  const low = String(message || "").toLowerCase();
+  if (/(?<!\p{L})jazz/u.test(low)) return "jazz";
+  if (/(?<!\p{L})(elektronisk|electronic|techno|house\s*musik)/u.test(low)) return "elektronisk";
+  if (/(?<!\p{L})(heavy\s*)?metal(?!\p{L})/u.test(low)) return "metal";
+  if (/(?<!\p{L})rock(?!\p{L})/u.test(low)) return "rock";
+  if (/(?<!\p{L})(hiphop|hip-hop|hip hop|rap)(?!\p{L})/u.test(low)) return "hiphop";
+  if (/(?<!\p{L})(klassisk|classical)/u.test(low)) return "klassisk";
+  return null;
+}
+export function rowIsGenre(row: Record<string, any>, genre: string): boolean {
+  const tags = Array.isArray(row.interest_tags) ? row.interest_tags.join(" ") : "";
+  const hay = ` ${String(row.title ?? "")} ${String(row.description ?? "")} ${tags} `.toLowerCase();
+  return (GENRES[genre] ?? [genre]).some(w => new RegExp(`(?<![\\p{L}])${w.replace(/[-\s]/g, "[-\\s]?")}(?![\\p{L}])`, "u").test(hay));
+}
+/** Genre named anywhere in the follow-up chain (latest wins). */
+export function chainGenre(userTexts: string[]): string | null {
+  for (let i = userTexts.length - 1; i >= 0; i -= 1) { const g = namedGenre(userTexts[i]); if (g) return g; }
+  return null;
 }
