@@ -863,7 +863,12 @@ const TOPIC_SYNONYMS: Record<string, string[]> = {
 /** A row mentions the topic word (or a close synonym). */
 export function topicWordHit(row: Record<string, any>, word: string): boolean {
   const tg = (v: any) => Array.isArray(v) ? v.join(" ") : String(v ?? "");
-  const hay = `${row.title ?? ""} ${row.name ?? ""} ${row.description ?? ""} ${tg(row.interest_tags)} ${tg(row.tags)} ${tg(row.main_categories)} ${tg(row.subcategory)}`.toLowerCase();
+  // 5,687 places carry the blanket ingest set restaurant+mad+café+bar; on
+  // those rows "café"/"bar" says nothing, so only name/description count.
+  const tagArr: string[] = Array.isArray(row.tags) ? row.tags.map(String) : String(row.tags ?? "").split(/,\s*/);
+  const blanket = ["restaurant", "mad", "café", "bar"].every((t) => tagArr.includes(t));
+  const placeTags = blanket ? tagArr.filter((t) => t !== "café" && t !== "bar").join(" ") : tg(row.tags);
+  const hay = `${row.title ?? ""} ${row.name ?? ""} ${row.description ?? ""} ${tg(row.interest_tags)} ${placeTags} ${tg(row.main_categories)} ${tg(row.subcategory)}`.toLowerCase();
   // Short words need whole-word hits: "dans" must not match "dansk".
   return (TOPIC_SYNONYMS[word] ?? [word]).some((w) => w.length >= 6 ? hay.includes(w) : new RegExp(`(?<!\\p{L})${w}(?!\\p{L})`, "u").test(hay));
 }
