@@ -1919,7 +1919,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                           filter_country: fnArgs.country ?? bbox?.country ?? null,
                           ...bboxParams,
                         }, () => { out.events_error = "rpc_failed"; });
-                        out.events = narrowSemanticEvents(out.events || [], bbox, inferDiscoveryIntent(latestUserMessage(userMessages)).dateWindow).slice(0, 8);
+                        out.events = narrowSemanticEvents(out.events || [], bbox, inferDiscoveryIntent(latestUserMessage(userMessages)).dateWindow, 25, fnArgs.city).slice(0, 8);
                         // M41 row cap: the model is never handed more than one
                         // page; a cap is flagged, not hidden.
                         out.events = capToolRows(out.events);
