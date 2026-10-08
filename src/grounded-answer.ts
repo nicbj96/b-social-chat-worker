@@ -144,6 +144,29 @@ function sentenceViolates(sentence: string, sources: GroundedSource[], lang: "da
   return null;
 }
 
+/** Europe/Copenhagen wall time, e.g. "lør. 10. okt. kl. 21:00"; "" when not ISO. */
+function readerTime(d: unknown, lang: "da" | "en"): string {
+  if (typeof d !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(d) || !Number.isFinite(Date.parse(d))) return "";
+  const dt = new Date(d);
+  const loc = lang === "da" ? "da-DK" : "en-GB";
+  const day = new Intl.DateTimeFormat(loc, { timeZone: "Europe/Copenhagen", weekday: "short", day: "numeric", month: "short" }).format(dt);
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Copenhagen", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(dt);
+  const hh = parts.find(p => p.type === "hour")?.value ?? "", mm = parts.find(p => p.type === "minute")?.value ?? "";
+  return `${day} ${lang === "da" ? "kl." : "at"} ${hh}:${mm}`;
+}
+
+/** Short bullet per verified source for chat prose: title, and price only when known. */
+export function renderReaderFacts(sources: GroundedSource[], lang: "da" | "en"): string[] {
+  return sources.slice(0, 5).map(s => {
+    const title = String(s.verified_fields[s.kind === "event" ? "title" : "name"] ?? "").trim();
+    if (!title) return "";
+    const price = priceLabel(s.verified_fields, lang);
+    const known = price !== (lang === "da" ? "Pris ukendt" : "Price unknown") && !price.includes("ukendt") && !price.includes("unknown");
+    const when = readerTime(s.verified_fields.date, lang);
+    return [`• ${title}`, when, known ? price : ""].filter(Boolean).join(" — ");
+  }).filter(Boolean);
+}
+
 export function groundModelReply(
   modelText: string,
   sources: GroundedSource[],
@@ -165,8 +188,13 @@ export function groundModelReply(
   const sentences = modelText.split(/(?<=[.!?])\s+/);
   const kept: string[] = [];
   const corrections: string[] = [];
+  let prevRemoved = false;
   for (const sentence of sentences) {
+    // "250 kr. i døren." splits after the abbreviation; a lowercase tail of a
+    // removed sentence is part of that sentence, not a new claim.
+    if (prevRemoved && /^\p{Ll}/u.test(sentence.trim())) continue;
     const violation = sentenceViolates(sentence, sources, da ? "da" : "en");
+    prevRemoved = Boolean(violation);
     if (!violation) kept.push(sentence);
     else if (!corrections.some(c => c.startsWith(violation))) {
       corrections.push(violation === "invented_entity"
@@ -175,6 +203,9 @@ export function groundModelReply(
     }
   }
   if (corrections.length === 0) return { reply: modelText, grounding: "verified", corrections };
-  const facts = renderGroundedFacts(sources, da ? "da" : "en");
+  // Reader-facing correction: the verified facts in plain language. Provenance
+  // (retrieved_at / source_updated_at) stays in the structured `sources`
+  // payload and the cards — it is not chat prose.
+  const facts = renderReaderFacts(sources, da ? "da" : "en");
   return { reply: [...kept, ...facts].filter(Boolean).join("\n"), grounding: "corrected", corrections };
 }

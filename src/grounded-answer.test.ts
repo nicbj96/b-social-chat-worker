@@ -70,7 +70,7 @@ describe("groundModelReply — adversarial model text", () => {
   it("flags a model time that contradicts the evidence instead of passing it", () => {
     const out = groundModelReply("\"Verified jazz\" klokken 07:00 om morgenen.", sources, { lang: "da" });
     expect(out.grounding === "corrected" || out.grounding === "flagged").toBe(true);
-    expect(out.reply).toContain("19:00"); // evidence-rendered time
+    expect(out.reply).toContain("21:00"); // evidence time, rendered in Europe/Copenhagen (19:00Z)
     expect(out.corrections.length).toBeGreaterThan(0);
   });
 
@@ -97,5 +97,14 @@ describe("groundModelReply — adversarial model text", () => {
     expect(known.join("\n")).toContain("2026-10-04T12:00:00Z");
     const unknown = renderGroundedFacts(sources, "da");
     expect(unknown.join("\n")).toContain("Kildens opdateringstid er ukendt");
+  });
+
+  it("correction prose has no provenance tail or 'Pris ukendt' noise", () => {
+    const out = groundModelReply("Billetten koster 25.", [src({ verified_fields: { id: src().id, title: "X" } })], { lang: "da" });
+    expect(out.grounding).toBe("corrected");
+    expect(out.reply).toContain("• X");
+    expect(out.reply).not.toContain("Hentet:");
+    expect(out.reply).not.toContain("opdateringstid");
+    expect(out.reply).not.toContain("Pris ukendt");
   });
 });
