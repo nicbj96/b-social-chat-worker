@@ -42,6 +42,13 @@ export function narrowSemanticEvents<T extends Record<string, any>>(rows: T[], b
 /** "tirsdag den 20. oktober 2026 kl. 20.00" in Europe/Copenhagen; "" when not a date. */
 export function danishWhen(iso: unknown): string {
   if (typeof iso !== "string" || !Number.isFinite(Date.parse(iso))) return "";
+  const d0 = new Date(iso);
+  // Midnight UTC is the importer's "date only" sentinel: never invent 02:00.
+  if (d0.getUTCHours() === 0 && d0.getUTCMinutes() === 0) {
+    const p0 = new Intl.DateTimeFormat("da-DK", { timeZone: "UTC", weekday: "long", day: "numeric", month: "long", year: "numeric" }).formatToParts(d0);
+    const g0 = (t: string) => p0.find(p => p.type === t)?.value ?? "";
+    return `${g0("weekday")} den ${g0("day")}. ${g0("month")} ${g0("year")} (tidspunkt ukendt)`;
+  }
   const parts = new Intl.DateTimeFormat("da-DK", { timeZone: "Europe/Copenhagen", weekday: "long", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date(iso));
   const g = (t: string) => parts.find(p => p.type === t)?.value ?? "";
   return `${g("weekday")} den ${g("day")}. ${g("month")} ${g("year")} kl. ${g("hour").padStart(2, "0")}.${g("minute")}`;

@@ -100,6 +100,18 @@ export function resolveDateWindow(message: string, now: Date = new Date()): Date
     };
   }
 
+  // Explicit day: "15. oktober", "den 15 okt", "15/10", "october 15", "15 october".
+  const MONTHS: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, maj: 5, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, okt: 10, oct: 10, nov: 11, dec: 12 };
+  const mName = "(jan|feb|mar|apr|maj|may|jun|jul|aug|sep|okt|oct|nov|dec)\\p{L}*";
+  let dm: RegExpMatchArray | null = null; let day = 0; let month = 0;
+  if ((dm = text.match(new RegExp(`(?<!\\d)(\\d{1,2})\\.?\\s*${mName}`, "iu")))) { day = +dm[1]; month = MONTHS[dm[2].toLowerCase()]; }
+  else if ((dm = text.match(new RegExp(`${mName}\\s+(\\d{1,2})(?!\\d)`, "iu")))) { day = +dm[2]; month = MONTHS[dm[1].toLowerCase()]; }
+  else if ((dm = text.match(/(?<![\d/])(\d{1,2})\/(\d{1,2})(?![\d/])/))) { day = +dm[1]; month = +dm[2]; }
+  if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+    const y = month < today.m || (month === today.m && day < today.d) ? today.y + 1 : today.y;
+    return dayWindow({ y, m: month, d: day }, `${day}. ${["januar","februar","marts","april","maj","juni","juli","august","september","oktober","november","december"][month - 1]}`);
+  }
+
   for (const wd of WEEKDAYS) {
     if (wd.re.test(text)) return dayWindow(addDays(today, (wd.dow - today.dow + 7) % 7), wd.label);
   }

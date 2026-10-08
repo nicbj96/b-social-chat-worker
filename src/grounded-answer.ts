@@ -252,7 +252,12 @@ export function groundModelReply(
   // Reader-facing correction: the verified facts in plain language. Provenance
   // (retrieved_at / source_updated_at) stays in the structured `sources`
   // payload and the cards — it is not chat prose.
-  const facts = renderReaderFacts(sources, da ? "da" : "en");
   const body = kept.join("").replace(/\n{3,}/g, "\n\n").trim();
+  // Don't repeat a source the surviving text already lists.
+  const lowBody = body.toLowerCase();
+  const facts = renderReaderFacts(sources, da ? "da" : "en").filter(f => {
+    const t = f.replace(/^•\s*/, "").split(" — ")[0].trim().toLowerCase();
+    return !t || !lowBody.includes(t);
+  });
   return { reply: [body, ...facts].filter(Boolean).join("\n"), grounding: "corrected", corrections };
 }

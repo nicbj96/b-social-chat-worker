@@ -698,6 +698,13 @@ export function resolveTurnDiscovery(userTexts: string[], contextCity?: string, 
       // is still free) unless the reader replaces them.
       const earlierFree = userTexts.slice(i, -1).some(t => FREE_RE.test(t));
       const merged: DiscoveryIntent = { ...prev, ...(earlierFree || own.free ? { free: true } : {}) };
+      // Walk the follow-up chain: the most recent message that named a city or
+      // a date wins ("tonight" → "and tomorrow?" → "only free ones" = tomorrow).
+      for (let j = i + 1; j < userTexts.length - 1; j += 1) {
+        const mid = inferDiscoveryIntent(userTexts[j], contextCity, now);
+        if (mid.city && mid.city !== contextCity) merged.city = mid.city;
+        if (mid.dateWindow) merged.dateWindow = mid.dateWindow;
+      }
       if (own.city) merged.city = own.city;
       if (own.dateWindow) merged.dateWindow = own.dateWindow;
       return { seeking: true, followUp: true, intent: merged };
