@@ -91,6 +91,22 @@ describe("/chat model path — proposal, grounding, budget", () => {
     expect(rest.some((u: string) => u.includes("date=lt."))).toBe(true);
   });
 
+  it("a free follow-up never tops up with paid rows", async () => {
+    const net = netStub(); vi.stubGlobal("fetch", net);
+    const ai = aiStub([
+      { tool_calls: [{ id: "t1", function: { name: "semantic_search", arguments: JSON.stringify({ query: "events", kind: "events", city: "Aalborg" }) } }] },
+      { response: "Her er gratis." },
+    ]);
+    await chat(envWith(ai, net), { messages: [
+      { role: "user", content: "er der noget gratis i odense i denne uge" },
+      { role: "assistant", content: "Her er gratis events." },
+      { role: "user", content: "hvad med i Aalborg?" },
+    ], current_intent: currentIntent });
+    const rest = net.mock.calls.map((c: any[]) => decodeURIComponent(String(c[0]))).filter((u: string) => u.includes("/rest/v1/events"));
+    expect(rest.length).toBeGreaterThan(0);
+    expect(rest.every((u: string) => u.includes("price=eq.0"))).toBe(true);
+  });
+
   it("grounds the normal model reply: contradictory price corrected to the verified field with currency", async () => {
     const net = netStub(); vi.stubGlobal("fetch", net);
     const ai = aiStub([
