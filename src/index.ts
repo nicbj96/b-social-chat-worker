@@ -1968,6 +1968,8 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                           out.events = fr.error ? [] : (fr.results || []);
                           if (fr.error) out.events_error = "rpc_failed";
                         }
+                        // Final topic gate: date/free top-ups must not reintroduce off-topic rows.
+                        if (turnIntent.queryTag && turnIntent.queryTag !== "musik") out.events = (out.events || []).filter((e: any) => matchesTopic(e, turnIntent.queryTag!) || (turnIntent.eventCategory && String(e.category || "").includes(turnIntent.eventCategory === "familie" ? "børn" : turnIntent.eventCategory)));
                         out.events = out.events.slice(0, 8);
                         // A date-bounded question ("i weekenden", "tonight") rarely
                         // has its events in the semantic top-N. Top up from the
@@ -2024,6 +2026,14 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                   result = await searchEvents(supabase, fnArgs);
                   if (result.results) {
                     result.results = capToolRows(result.results);
+                    // A named genre ("jazz") is the answer's subject: drop nu-metal etc.
+                    {
+                      const tq = turnDiscovery(userMessages, ctx).intent.queryTag;
+                      if (tq === "jazz") {
+                        const on = result.results.filter((e: any) => matchesTopic(e, "jazz"));
+                        if (on.length > 0) result.results = on;
+                      }
+                    }
                     result.results.forEach((e: any) => {
                       if (!e?.id) return;
                       collectedEventIds.push(e.id);

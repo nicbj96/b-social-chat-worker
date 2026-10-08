@@ -227,8 +227,8 @@ export function groundModelReply(
     };
   }
   // Internal tool-loop narration is not an answer to the reader.
-  modelText = modelText.replace(/(?<=[.!?])[ \t]+(?:let me (?:try )?(?:search(?:ing)?|look(?:ing)?)|lad mig (?:prøve at )?(?:søge|kigge))[^.!?\n]*[.!?]?/gi, "");
-  modelText = modelText.replace(/^[ \t]*(?:let me (?:try )?(?:search(?:ing)?|look(?:ing)?)[^\n]*|lad mig (?:prøve at )?(?:søge|kigge)[^\n]*|jeg (?:prøver|søger) (?:igen|lige)[^\n]*)\n?/gim, "");
+  modelText = modelText.replace(/(?<=[.!?])[ \t]+(?:let me (?:try (?:to )?)?(?:search(?:ing)?|look(?:ing)?)|lad mig (?:prøve at )?(?:søge|kigge))[^.!?\n]*[.!?]?/gi, "");
+  modelText = modelText.replace(/^[ \t]*(?:let me (?:try (?:to )?)?(?:search(?:ing)?|look(?:ing)?)[^\n]*|lad mig (?:prøve at )?(?:søge|kigge)[^\n]*|jeg (?:prøver|søger) (?:igen|lige)[^\n]*)\n?/gim, "");
   if (!modelText.trim()) {
     return { reply: sources.length ? renderGroundedFacts(sources, da ? "da" : "en").join("\n") : "", grounding: sources.length ? "verified" : "flagged", corrections: [] };
   }
