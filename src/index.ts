@@ -1952,6 +1952,9 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                             // Only an unrelaxed hit: a dropped date window ("i weekenden" → July
                             // 2027) must never be presented as matching the question.
                             if (!res.error && (res.relaxed || []).length === 0 && (res.results || []).length > 0) out.events = res.results;
+                            // Nothing on-topic anywhere: an honest empty answer beats a
+                            // 22:00 DJ night offered as a kids' event.
+                            else if (!res.error) out.events = [];
                           }
                         }
                         if (turnIntent.free) {
