@@ -518,11 +518,13 @@ export function formatFallbackReply(
     intent.city ? `${copy.cityPrefix} ${intent.city}` : "",
     intent.dateWindow?.label ?? "",
     intent.eventCategory && relaxed.includes("category") ? intent.eventCategory : "",
+    intent.free ? (language === "en" ? "free" : "gratis") : "",
   ].filter(Boolean).join(", ");
   const droppedWords = relaxed
     .map((r) => (r === "date" ? copy.droppedDate : copy.droppedCategory))
     .join(language === "en" ? " and " : " og ");
-  const relaxedIntro = `${copy.relaxedA} (${asked}). ${copy.relaxedB} ${droppedWords} ${copy.relaxedC}${intent.city ? ` ${copy.cityPrefix} ${intent.city}` : ""}:`;
+  const kept = intent.free ? (language === "en" ? " (still free only)" : " (stadig kun gratis)") : "";
+  const relaxedIntro = `${copy.relaxedA} (${asked}). ${copy.relaxedB} ${droppedWords} ${copy.relaxedC}${intent.city ? ` ${copy.cityPrefix} ${intent.city}` : ""}${kept}:`;
   const lines = [
     // Show the DERIVED city when there is no real one, marked as approximate.
     // Matching on nearest_city while printing "by ikke angivet" made a place we
@@ -535,7 +537,7 @@ export function formatFallbackReply(
           : copy.cityMissing;
       return `• ${place.name} — ${where}`;
     }),
-    ...selectedEvents.map((event) => `• ${event.title} — ${event.location || copy.locationMissing}${event.date ? ` (${event.date})` : ""}`),
+    ...selectedEvents.map((event) => `• ${event.title} — ${event.location || copy.locationMissing}${event.date ? ` (${event.date})` : ""}${intent.free ? (language === "en" ? " — Free" : " — Gratis") : ""}`),
   ].slice(0, intent.limit);
 
   // The reader asked for EVENTS and we are about to show only PLACES. Calling

@@ -88,3 +88,17 @@ describe("r16 L2n: tool-loop narration", () => {
     expect(r.reply).toContain("I found no kids events.");
   });
 });
+
+import { formatFallbackReply } from "./discovery-fallback";
+describe("r17", () => {
+  it("M2: relaxed free fallback says it is still free and labels rows", () => {
+    const r = formatFallbackReply({ kind: "events", city: "Odense", free: true, eventCategory: "musik", dateWindow: { from: "a", to: "b", label: "i weekenden" }, limit: 4 } as any, [], [{ id: "1", title: "X", location: "Odense", date: "27. okt" } as any], "da", ["date"]);
+    expect(r.reply).toContain("gratis");
+    expect(r.reply).toContain("stadig kun gratis");
+    expect(r.reply).toContain("— Gratis");
+  });
+  it("L2n: mid-line narration removed", () => {
+    const r = groundModelReply("No kids events found. Let me try searching again. Want something else?", [], { lang: "en" });
+    expect(r.reply).not.toMatch(/Let me try/i);
+  });
+});
