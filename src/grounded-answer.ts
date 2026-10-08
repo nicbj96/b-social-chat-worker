@@ -212,7 +212,15 @@ export function renderReaderFacts(sources: GroundedSource[], lang: "da" | "en"):
 
 /** N4: one bullet style ("•") and no blank lines inside a list. */
 export function normalizeBullets(text: string): string {
-  const lines = String(text || "").split("\n").map(l => l.replace(/^[ \t]*[*\-•][ \t]+(?=\S)/u, "• "));
+  const cleaned = String(text || "")
+    // Raw fields are not prose: "latitude: 55.68" means nothing to a reader.
+    .replace(/^[ \t]*(?:latitude|longitude|lat|lng|lon)\s*:\s*-?\d+(?:\.\d+)?[ \t]*$\n?/gimu, "")
+    // Markdown headings render as "###" in the bubble.
+    .replace(/^[ \t]*#{1,6}[ \t]+(.+)$/gmu, "$1:")
+    // A reply that opens mid-thought ("Men her er …").
+    .replace(/^\s*Men\s+(\p{L})/u, (_m, c: string) => c.toUpperCase())
+    .replace(/^\s*But\s+(\p{L})/u, (_m, c: string) => c.toUpperCase());
+  const lines = cleaned.split("\n").map(l => l.replace(/^[ \t]*[*\-•][ \t]+(?=\S)/u, "• "));
   const isB = (l: string) => l.startsWith("• ");
   const out: string[] = [];
   for (let k = 0; k < lines.length; k += 1) {

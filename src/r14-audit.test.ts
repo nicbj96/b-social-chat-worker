@@ -378,3 +378,24 @@ describe("r25c", () => {
 
 import { placeNameNeedles } from "./discovery-fallback";
 describe("r25d", () => { it("café name needles", () => { expect(placeNameNeedles(["café"])).toContain("kaffe"); }); });
+
+import { placeTopicsOf } from "./discovery-fallback";
+describe("r26", () => {
+  it("Aalborg date question is Danish", () => { expect(inferResponseLanguage("events i Aalborg 20. oktober")).toBe("da"); expect(inferResponseLanguage("what's on in Aarhus tonight?")).toBe("en"); });
+  it("film/biograf/weekend are discovery", () => {
+    expect(isDiscoverySeekingMessage("film København")).toBe(true);
+    expect(isDiscoverySeekingMessage("biograf København")).toBe(true);
+    expect(isDiscoverySeekingMessage("hvad sker der i weekenden")).toBe(true);
+  });
+  it("techno is its own strict genre", () => {
+    expect(namedGenre("techno")).toBe("techno");
+    expect(rowIsGenre({ title: "Vin & Vinyler", description: "DJ spiller disco" }, "techno")).toBe(false);
+  });
+  it("place topics", () => { expect(placeTopicsOf(["museum København gratis"])).toEqual(["museum"]); expect(placeTopicsOf(["biograf København"])).toEqual(["biograf"]); });
+});
+describe("r26 text", () => {
+  it("strips coords, headings and opening Men", () => {
+    const r = normalizeBullets("Men her er noget:\n### Events\nlatitude: 55.68\n• A");
+    expect(r).toBe("Her er noget:\nEvents:\n• A");
+  });
+});
