@@ -1352,6 +1352,47 @@ async function directDiscoveryFallback(
  * catalogue. Everything else gets an honest 200 — not a 5xx, because the outage
  * is ours, and not catalogue copy, because there is nothing to report.
  */
+/**
+ * Deterministic retrieval for a discovery question the model did not tool for.
+ * Returns OpenAI-shaped tool calls whose arguments are the filters that
+ * actually produced rows (after the fallback's relaxing steps); [] when the
+ * message is not discovery-seeking or nothing matched.
+ */
+async function synthesizeDiscoveryToolCalls(
+  env: Env,
+  userMessages: ChatMessage[],
+  context: { user_prefs?: { city?: string } },
+): Promise<{ id: string; type: "function"; function: { name: string; arguments: string } }[]> {
+  const latest = latestUserMessage(userMessages);
+  if (!isDiscoverySeekingMessage(latest)) return [];
+  const intent = inferDiscoveryIntent(latest, context.user_prefs?.city);
+  const supabase = createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY);
+  const calls: { id: string; type: "function"; function: { name: string; arguments: string } }[] = [];
+  try {
+    if (intent.kind === "events" || intent.kind === "both") {
+      let used: Record<string, unknown> | null = null;
+      const res = await searchEventsRelaxing(intent, (filters) => { used = filters; return searchEvents(supabase, filters); });
+      if (!res.error && (res.results?.length ?? 0) > 0 && used) {
+        calls.push({ id: "call_auto_events", type: "function", function: { name: "search_events", arguments: JSON.stringify(used) } });
+      }
+    }
+    if (intent.kind === "places" || intent.kind === "both") {
+      const gate = placeSearchGate(intent);
+      if (!gate.skipped) {
+        const args = { city: intent.city, category: intent.placeCategory };
+        const res = await searchPlaces(supabase, args);
+        if (!res.error && (res.results?.length ?? 0) > 0) {
+          calls.push({ id: "call_auto_places", type: "function", function: { name: "search_places", arguments: JSON.stringify(args) } });
+        }
+      }
+    }
+  } catch (error) {
+    console.error(JSON.stringify({ event: "auto_retrieval_failed", detail: String(error instanceof Error ? error.message : error).slice(0, 140) }));
+    return [];
+  }
+  return calls;
+}
+
 async function catalogueFallbackForTurn(
   env: Env,
   userMessages: ChatMessage[],
@@ -1743,6 +1784,15 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
     // every consumer below can rely on tc.function.name.
     if (Array.isArray(aiResponse?.tool_calls)) {
       aiResponse.tool_calls = normalizeToolCalls(aiResponse.tool_calls);
+    }
+    // The model often answers Danish discovery questions WITHOUT calling a
+    // tool, which used to drop the turn to the plain catalogue list. Instead,
+    // retrieve deterministically (same relaxing search as the fallback) and
+    // hand the rows to the model as tool results, so the reply is still an
+    // AI-written answer grounded in real catalogue rows.
+    if (!(aiResponse?.tool_calls?.length > 0)) {
+      const synthesized = await synthesizeDiscoveryToolCalls(env, userMessages, ctx);
+      if (synthesized.length > 0) aiResponse = { ...aiResponse, content: "", response: undefined, tool_calls: synthesized };
     }
     if (aiResponse.tool_calls && aiResponse.tool_calls.length > 0) {
       const supabase = createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY);

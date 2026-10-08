@@ -130,7 +130,21 @@ describe("no-tool-call discovery turn is a good answer, not an outage", () => {
     expect(res.status).toBe(200);
     const body: any = await res.json();
     expect(body.event_ids).toContain(DB_EVENT.id);
-    expect(body.tool_calls_made).toEqual(["direct_discovery_fallback"]);
+    // The worker retrieves deterministically and lets the model WRITE the
+    // answer from those rows (second call), instead of dropping the AI.
+    expect(body.tool_calls_made).toEqual(["search_events"]);
+    expect(ai).toHaveBeenCalledTimes(2);
     expect(body.degraded).toBeUndefined();
+  });
+
+  it("falls back to the plain catalogue list when deterministic retrieval finds nothing", async () => {
+    (queries.searchPlaces as any).mockResolvedValue({ results: [] });
+    (queries.searchEvents as any).mockReset();
+    (queries.searchEvents as any).mockResolvedValue({ results: [] });
+    const ai = vi.fn().mockResolvedValue({ response: "Her er nogle forslag" });
+    const res = await worker.fetch(chatRequest("jazz i København i weekenden"), baseEnv(ai), executionContext());
+    const body: any = await res.json();
+    expect(body.tool_calls_made).toEqual(["direct_discovery_fallback"]);
+    expect(ai).toHaveBeenCalledTimes(1);
   });
 });
