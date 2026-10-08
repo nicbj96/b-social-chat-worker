@@ -367,3 +367,11 @@ describe("r25b", () => {
     expect(topicWordHit({ name: "Restaurant Koefoed", tags: ["restaurant"] }, "café")).toBe(false);
   });
 });
+
+describe("r25c", () => {
+  it("blanket restaurant tag set is not a café", () => {
+    expect(topicWordHit({ name: "Morgenstedet", description: "restaurant in Copenhagen", tags: ["restaurant", "mad", "café", "bar"] }, "café")).toBe(false);
+    expect(topicWordHit({ name: "Kaffebaren", tags: ["café"] }, "café")).toBe(true);
+    expect(topicWordHit({ name: "Morgenstedet", tags: "restaurant, mad, café, bar" }, "bar")).toBe(false);
+  });
+});
