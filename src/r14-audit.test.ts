@@ -28,3 +28,11 @@ describe("r14 audit fixes", () => {
     expect(seen.every((f) => f.free === true)).toBe(true);
   });
 });
+
+import { groundModelReply } from "./grounded-answer";
+describe("negated free statement", () => {
+  it("'ingen gratis events' is kept; 'er gratis' still needs evidence", () => {
+    expect(groundModelReply("Der er desværre ingen gratis events i Aalborg denne uge.", [], { lang: "da" }).grounding).toBe("verified");
+    expect(groundModelReply("Koncerten er gratis.", [], { lang: "da" }).grounding).toBe("corrected");
+  });
+});
