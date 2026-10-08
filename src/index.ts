@@ -2003,7 +2003,14 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                             ...(turnIntent.free ? { free: true } : {}),
                           } as any);
                           const seen = new Set(out.events.map((e: any) => e?.id));
-                          for (const e of sup.results || []) if (e?.id && !seen.has(e.id) && out.events.length < 8) { out.events.push(e); seen.add(e.id); }
+                          // R22: the top-up obeys the same topic + genre gate as the
+                          // answer ("kun børn" in Aarhus must not add a vinyl night;
+                          // "jazz … dagen efter" must not add comedy).
+                          const gTop = chainGenre(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")));
+                          const onTopicTop = (e: any) =>
+                            (!turnIntent.queryTag || turnIntent.queryTag === "musik" || matchesTopic(e, turnIntent.queryTag) || (turnIntent.queryTag === turnIntent.eventCategory && !!turnIntent.eventCategory && String(e.category || "").includes(turnIntent.eventCategory === "familie" ? "børn" : turnIntent.eventCategory)))
+                            && (!gTop || rowIsGenre(e, gTop));
+                          for (const e of sup.results || []) if (e?.id && !seen.has(e.id) && out.events.length < 8 && onTopicTop(e)) { out.events.push(e); seen.add(e.id); }
                         }
                         // M41 row cap: the model is never handed more than one
                         // page; a cap is flagged, not hidden.
