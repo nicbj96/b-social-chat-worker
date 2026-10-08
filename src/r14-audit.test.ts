@@ -161,3 +161,20 @@ describe("r19c", () => {
     expect(urls.some(u => u === "eq:country,DK")).toBe(true);
   });
 });
+
+describe("r20", () => {
+  const n = new Date("2026-10-08T10:00:00Z");
+  it("R20-1: 'og dagen efter?' keeps city/free and shifts the window", () => {
+    const a = resolveTurnDiscovery(["gratis i København i morgen"], undefined, n).intent.dateWindow!;
+    const t = resolveTurnDiscovery(["gratis i København i morgen", "og dagen efter?"], undefined, n);
+    expect(t.seeking).toBe(true);
+    expect(t.intent.city).toBe("København");
+    expect(t.intent.free).toBe(true);
+    expect(Date.parse(t.intent.dateWindow!.from) - Date.parse(a.from)).toBe(86_400_000);
+  });
+  it("R20-2: 'kun jazz' narrows to jazz", () => {
+    const t = resolveTurnDiscovery(["gratis koncerter i København", "kun jazz"], undefined, n);
+    expect(t.intent.queryTag).toBe("jazz");
+    expect(t.intent.free).toBe(true);
+  });
+});

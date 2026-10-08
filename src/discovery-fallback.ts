@@ -697,6 +697,7 @@ export const FREE_RE = /(?<!\p{L})(?:gratis|free|kost(?:er)?\s+ingenting|uden\s+
 const PRICE_Q_RE = /(?<!\p{L})(?:cheapest|billigste|dyreste|hvad\s+koster|pris(?:en)?|billet(?:ter|pris)?|how\s+much|price|cost)(?!\p{L})/iu;
 // References to the previous answer ("the first one", "den første", "which one").
 const REFER_RE = /(?<!\p{L})(?:(?:the\s+)?(?:first|second|third|last)\s+one|den\s+(?:første|anden|tredje|sidste)|which\s+one|hvilken\s+af\s+dem|more\s+about|mere\s+om|tell\s+me\s+more|fortæl\s+mere)(?!\p{L})/iu;
+const DAY_AFTER_RE = /(?<!\p{L})(?:dagen\s+efter|næste\s+dag|day\s+after|the\s+next\s+day)(?!\p{L})/iu;
 const FOLLOW_UP_RE = /^\s*(?:og|and|men|but)?\s*(?:hvad|what)\s+(?:så\s+)?(?:med|about)\b/iu;
 
 /**
@@ -711,7 +712,7 @@ export function resolveTurnDiscovery(userTexts: string[], contextCity?: string, 
   if (FREE_RE.test(latest)) own.free = true;
   if (isDiscoverySeekingMessage(latest)) return { seeking: true, followUp: false, intent: own };
   const short = latest.trim().length <= 80;
-  const looksFollowUp = FOLLOW_UP_RE.test(latest) || (short && (own.dateWindow != null || own.city != null || own.free === true || own.eventCategory != null || PRICE_Q_RE.test(latest) || REFER_RE.test(latest)));
+  const looksFollowUp = FOLLOW_UP_RE.test(latest) || (short && (own.dateWindow != null || own.city != null || own.free === true || own.eventCategory != null || PRICE_Q_RE.test(latest) || REFER_RE.test(latest) || DAY_AFTER_RE.test(latest)));
   if (looksFollowUp) {
     for (let i = userTexts.length - 2; i >= 0; i -= 1) {
       if (!isDiscoverySeekingMessage(userTexts[i])) continue;
@@ -729,6 +730,11 @@ export function resolveTurnDiscovery(userTexts: string[], contextCity?: string, 
       }
       if (own.city) merged.city = own.city;
       if (own.dateWindow) merged.dateWindow = own.dateWindow;
+      // "og dagen efter?" = the previous window shifted one day.
+      if (!own.dateWindow && merged.dateWindow && DAY_AFTER_RE.test(latest)) {
+        const shift = (iso: string) => new Date(Date.parse(iso) + 86_400_000).toISOString();
+        merged.dateWindow = { from: shift(merged.dateWindow.from), to: shift(merged.dateWindow.to), label: latest.match(DAY_AFTER_RE)![0].toLowerCase() };
+      }
       // "kun musik" narrows the category but keeps city/date/free.
       if (own.eventCategory) { merged.eventCategory = own.eventCategory; merged.queryTag = own.queryTag; merged.kind = own.kind === "places" ? merged.kind : "events"; }
       return { seeking: true, followUp: true, intent: merged };

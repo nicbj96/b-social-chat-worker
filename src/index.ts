@@ -1841,6 +1841,9 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
               if (fnArgs && !fnArgs.city && (fnName === "semantic_search" || fnName === "search_events" || fnName === "search_places")) {
                 const namedCity = turnDiscovery(userMessages, ctx).intent.city;
                 if (namedCity) fnArgs.city = namedCity;
+              } else if (fnArgs && typeof fnArgs.city === "string" && /^(kbh|cph|copenhagen|kobenhavn)$/i.test(fnArgs.city.trim())) {
+                // "KBH" from the model matches no row: use the catalogue's name.
+                fnArgs.city = "København";
               }
               // The reader's date window and free filter are facts about the
               // question, not suggestions: the model's own dates never widen them.
@@ -1971,7 +1974,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                           if (fr.error) out.events_error = "rpc_failed";
                         }
                         // Final topic gate: date/free top-ups must not reintroduce off-topic rows.
-                        if (turnIntent.queryTag && turnIntent.queryTag !== "musik") out.events = (out.events || []).filter((e: any) => matchesTopic(e, turnIntent.queryTag!) || (turnIntent.eventCategory && String(e.category || "").includes(turnIntent.eventCategory === "familie" ? "børn" : turnIntent.eventCategory)));
+                        if (turnIntent.queryTag && turnIntent.queryTag !== "musik") out.events = (out.events || []).filter((e: any) => matchesTopic(e, turnIntent.queryTag!) || (turnIntent.queryTag === turnIntent.eventCategory && turnIntent.eventCategory && String(e.category || "").includes(turnIntent.eventCategory === "familie" ? "børn" : turnIntent.eventCategory)));
                         out.events = out.events.slice(0, 8);
                         // A date-bounded question ("i weekenden", "tonight") rarely
                         // has its events in the semantic top-N. Top up from the
@@ -2041,8 +2044,8 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                     {
                       const tq = turnDiscovery(userMessages, ctx).intent.queryTag;
                       if (tq === "jazz") {
-                        const on = result.results.filter((e: any) => matchesTopic(e, "jazz"));
-                        if (on.length > 0) result.results = on;
+                        // Nothing jazz is an honest empty answer, not STEP & AMBIENT.
+                        result.results = result.results.filter((e: any) => matchesTopic(e, "jazz"));
                       }
                     }
                     result.results.forEach((e: any) => {
