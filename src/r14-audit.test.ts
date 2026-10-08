@@ -59,3 +59,14 @@ describe("r15 audit fixes", () => {
     expect(danishWhen("2026-10-10T18:00:00+00:00")).toContain("kl. 20.00");
   });
 });
+
+describe("L-B: outro after corrected bullets", () => {
+  it("closing question moves below the verified list", () => {
+    const src: any[] = [{ kind: "event", id: "e1", verified_fields: { title: "Real Gig", date: "2026-10-10T18:00:00Z", date_raw: "2026-10-10T18:00:00Z", price_amount: 100, currency: "DKK" } }];
+    const r = groundModelReply("Here is live music in Aarhus:\n\n* Fake Band at 23:00\n\nWould you like more information about any of these events?", src as any, { lang: "en" });
+    expect(r.grounding).toBe("corrected");
+    const lines = r.reply.split("\n").filter(Boolean);
+    expect(lines[lines.length - 1]).toMatch(/Would you like more information/);
+    expect(r.reply.indexOf("Real Gig")).toBeLessThan(r.reply.indexOf("Would you like"));
+  });
+});

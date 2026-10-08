@@ -259,5 +259,12 @@ export function groundModelReply(
     const t = f.replace(/^•\s*/, "").split(" — ")[0].trim().toLowerCase();
     return !t || !lowBody.includes(t);
   });
-  return { reply: [body, ...facts].filter(Boolean).join("\n"), grounding: "corrected", corrections };
+  // A closing question ("Vil du have mere information…?") belongs after the
+  // verified list, not between the intro and the bullets.
+  const lines = body.split("\n");
+  const tail: string[] = [];
+  while (facts.length && lines.length > 1 && /\?\s*$/.test(lines[lines.length - 1].trim())) tail.unshift(lines.pop()!);
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  const head = lines.join("\n").trim();
+  return { reply: [head, ...facts, ...(tail.length ? ["", ...tail] : [])].filter((x, k, a) => x !== "" || (k > 0 && a[k - 1] !== "")).join("\n").trim(), grounding: "corrected", corrections };
 }
