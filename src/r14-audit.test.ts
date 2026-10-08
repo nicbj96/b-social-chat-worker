@@ -242,3 +242,12 @@ describe("r22", () => {
     expect(r.reply).toContain("Børneteater");
   });
 });
+
+describe("r22b", () => {
+  it("mid-chain category survives a city follow-up", () => {
+    const t = resolveTurnDiscovery(["gratis i København i weekenden", "kun børn", "og i Aarhus?"], undefined, new Date("2026-10-08T10:00:00Z"));
+    expect(t.intent.city).toBe("Aarhus");
+    expect(t.intent.free).toBe(true);
+    expect(t.intent.eventCategory).toBeTruthy();
+  });
+});
