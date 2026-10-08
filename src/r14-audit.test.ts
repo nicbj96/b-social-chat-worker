@@ -221,3 +221,24 @@ describe("r21d", () => {
     expect(groundModelReply("Ingen resultater.\n\n[jazzklubber København]\n\nNoget andet?", [], { lang: "da" }).reply).not.toContain("[");
   });
 });
+
+describe("r22", () => {
+  const n = new Date("2026-10-08T10:00:00Z");
+  it("R22-2: 'hvad sker der dagen efter?' after an undated question = tomorrow", () => {
+    const t = resolveTurnDiscovery(["jazz København", "hvad sker der dagen efter?"], undefined, n);
+    expect(t.seeking).toBe(true);
+    expect(t.intent.city).toBe("København");
+    expect(t.intent.dateWindow?.label).toBe("i morgen");
+  });
+  it("R22-1: city-less relaxing carries country", async () => {
+    const seen: any[] = [];
+    await searchEventsRelaxing({ kind: "events", country: "DK", dateWindow: { from: "2026-10-08T15:00:00Z", to: "2026-10-08T22:00:00Z", label: "i aften" }, limit: 4 } as any, async (f) => { seen.push(f); return { results: [] }; });
+    expect(seen.every((f) => f.country === "DK")).toBe(true);
+  });
+  it("R22-3: '* Ingen fundet' bullet replaced by verified rows", () => {
+    const src: any[] = [{ kind: "event", id: "1", verified_fields: { title: "Børneteater", date: "2026-10-10T09:00:00Z", date_raw: "2026-10-10T09:00:00Z", price_amount: 0 } }];
+    const r = groundModelReply("Her er et gratis event for børn i Aarhus:\n* Ingen fundet", src as any, { lang: "da" });
+    expect(r.reply).not.toMatch(/Ingen fundet/);
+    expect(r.reply).toContain("Børneteater");
+  });
+});
