@@ -1947,7 +1947,9 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                             // Nothing semantic is actually on-genre: answer from the
                             // tag search instead of calling rock/electronica "jazz".
                             const res = await searchEventsRelaxing({ ...turnIntent, ...(fnArgs.city ? { city: fnArgs.city } : {}) }, (filters) => searchEvents(createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY), filters));
-                            if (!res.error && !(res.relaxed || []).includes("category") && (res.results || []).length > 0) out.events = res.results;
+                            // Only an unrelaxed hit: a dropped date window ("i weekenden" → July
+                            // 2027) must never be presented as matching the question.
+                            if (!res.error && (res.relaxed || []).length === 0 && (res.results || []).length > 0) out.events = res.results;
                           }
                         }
                         if (turnIntent.free) {
@@ -1969,7 +1971,9 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                         if (turnWindow && out.events.length < 4) {
                           const sup = await searchEvents(createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY), {
                             ...(fnArgs.city ? { city: fnArgs.city } : {}), date_from: turnWindow.from, date_to: turnWindow.to,
-                          });
+                            // The top-up obeys the same free filter as the answer.
+                            ...(turnIntent.free ? { free: true } : {}),
+                          } as any);
                           const seen = new Set(out.events.map((e: any) => e?.id));
                           for (const e of sup.results || []) if (e?.id && !seen.has(e.id) && out.events.length < 8) { out.events.push(e); seen.add(e.id); }
                         }
