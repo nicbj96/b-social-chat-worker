@@ -232,7 +232,17 @@ export function groundModelReply(
   // Split into claims without breaking "10. oktober kl. 22.00": boundaries are
   // newlines, or sentence punctuation followed by an uppercase/bullet start.
   // Separators are kept so surviving text is rebuilt exactly as written.
-  const parts = modelText.split(/(\n+|(?<=[.!?])[ \t]+(?=[\p{Lu}*•\-"]))/u);
+  // A bullet line is one claim: event titles carry their own full stops
+  // ("AI & Digital Confidence. Futurists …") and must not be cut in half.
+  const parts: string[] = [];
+  for (const piece of modelText.split(/(\n+)/)) {
+    if (/^\n+$/.test(piece)) { if (parts.length % 2 === 1) parts.push(piece); else parts.push("", piece); continue; }
+    const sub = /^\s*(?:[*•\-]|\d+[.)])\s/.test(piece) ? [piece] : piece.split(/((?<=[.!?])[ \t]+(?=[\p{Lu}*•\-"]))/u);
+    for (let k = 0; k < sub.length; k += 1) {
+      if (k % 2 === 0) { if (parts.length % 2 === 1) parts.push(""); parts.push(sub[k]); }
+      else parts.push(sub[k]);
+    }
+  }
   const kept: string[] = [];
   const corrections: string[] = [];
   for (let i = 0; i < parts.length; i += 2) {

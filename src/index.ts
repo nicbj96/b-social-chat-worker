@@ -1223,6 +1223,7 @@ async function handleAdminAsk(request: Request, env: Env): Promise<Response> {
 
 
 // S4 — conservative input caps (cost + prompt-injection blowup guard).
+const CHAT_REPLY_MAX_TOKENS = 1024;
 const MAX_MESSAGES = 30;        // keep only the last N turns
 const MAX_MESSAGE_CHARS = 4000; // per-message content cap
 const MAX_BODY_BYTES = 256 * 1024; // reject trivially-huge bodies early (256KB)
@@ -1763,6 +1764,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
         messages,
         tools: TOOLS,
         tool_choice: "auto",
+        max_tokens: CHAT_REPLY_MAX_TOKENS,
       }));
     } catch (error) {
       if (error instanceof TurnDeadlineExceeded) {
@@ -2312,6 +2314,8 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
           budget.reserveModel();
           finalResponse = await deadline.race(runAiCounted(env.AI, "@cf/meta/llama-4-scout-17b-16e-instruct", {
             messages,
+            // The provider default (256) cut lists off mid-word ("Københav").
+            max_tokens: CHAT_REPLY_MAX_TOKENS,
           }));
         } catch (error) {
           if (error instanceof TurnDeadlineExceeded) {
