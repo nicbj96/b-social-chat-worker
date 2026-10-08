@@ -2025,7 +2025,16 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                   break;
                 }
                 case "search_events":
-                  result = await searchEvents(supabase, fnArgs);
+                  // A Danish question that names no city or country is about
+                  // Denmark (not Lachine, Québec) — filtered in the same query.
+                  // Prefer Denmark; only if Denmark has nothing does the worldwide
+                  // catalogue answer (the CHF contract stays intact).
+                  if (fnArgs && !fnArgs.city && !fnArgs.country && inferResponseLanguage(latestUserMessage(userMessages)) !== "en") {
+                    result = await searchEvents(supabase, { ...fnArgs, country: "DK" } as any);
+                    if (!result.error && (result.results || []).length === 0) result = await searchEvents(supabase, fnArgs);
+                  } else {
+                    result = await searchEvents(supabase, fnArgs);
+                  }
                   if (result.results) {
                     result.results = capToolRows(result.results);
                     // A named genre ("jazz") is the answer's subject: drop nu-metal etc.

@@ -151,3 +151,13 @@ describe("r19b", () => {
     expect(t.intent.dateWindow?.label).toMatch(/søndag/);
   });
 });
+
+import { searchEvents } from "./supabase-queries";
+describe("r19c", () => {
+  it("country filter reaches the query", async () => {
+    const urls: string[] = [];
+    const sb: any = { from: () => { const q: any = new Proxy({}, { get: (_t, k) => k === "then" ? (r: any) => r({ data: [], error: null }) : (...a: any[]) => { urls.push(`${String(k)}:${a.join(",")}`); return q; } }); return q; } };
+    await searchEvents(sb, { country: "DK" } as any);
+    expect(urls.some(u => u === "eq:country,DK")).toBe(true);
+  });
+});
