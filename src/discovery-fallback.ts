@@ -910,3 +910,14 @@ export function honestEmptyReply(intent: DiscoveryIntent, genre: string | null, 
     ? `Jeg fandt ingen ${free}${what}${where}${when} i B-Social-kataloget. Vil du prøve en anden dag, by eller type?`
     : `I found no ${free}${what}${where}${when} in the B-Social catalogue. Want to try another day, city or kind of event?`;
 }
+
+/** Name fragments that identify a place type when tags cannot ("café", "bar"). */
+const PLACE_NAME_NEEDLES: Record<string, string[]> = {
+  "café": ["café", "cafe", "kaffe", "coffee", "espresso"],
+  bar: [" bar", "bar ", "pub", "bodega", "værtshus", "cocktail", "vinbar", "ølbar"],
+  museum: ["museum", "museet"],
+  legeplads: ["legeplads"],
+};
+export function placeNameNeedles(words: string[]): string[] {
+  return Array.from(new Set(words.flatMap((w) => PLACE_NAME_NEEDLES[w] ?? [])));
+}

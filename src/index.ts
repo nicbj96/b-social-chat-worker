@@ -48,7 +48,7 @@ import {
 } from "./chat-provider";
 import { rateLimitActorKey } from "./ratelimit";
 import { resolveChatTier } from "./plus-tier";
-import { chainGenre, rowIsGenre, topicWordHit, nonGenreTopics, GENRES, honestEmptyReply, topicTagList } from "./discovery-fallback";
+import { chainGenre, rowIsGenre, topicWordHit, nonGenreTopics, GENRES, honestEmptyReply, topicTagList, placeNameNeedles } from "./discovery-fallback";
 import { resolveTurnDiscovery, looksLikeEventListing, looksLikeUngroundedFact, clarifyDiscoveryReply } from "./discovery-fallback";
 import { aiBreakerIsOpen, searchEventsRelaxing, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 import type { DiscoveryIntent, Relaxation } from "./discovery-fallback";
@@ -2054,7 +2054,14 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                         ? await searchPlacesForQuery(env, placeQuery, 8, fnArgs.city)
                         : { results: [], skipped: "no_query_or_city" };
                       out.places = capToolRows(placeOutcome.results);
-                      { const tws = nonGenreTopics(turnDiscovery(userMessages, ctx).intent.topicWords); if (tws.length) out.places = out.places.filter((p: any) => tws.some((w) => topicWordHit(p, w))); }
+                      { const tws = nonGenreTopics(turnDiscovery(userMessages, ctx).intent.topicWords); if (tws.length) {
+                        out.places = out.places.filter((p: any) => tws.some((w) => topicWordHit(p, w)));
+                        const needles = placeNameNeedles(tws);
+                        if (out.places.length === 0 && needles.length && fnArgs.city) {
+                          const byName = await searchPlaces(createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY), { city: fnArgs.city, name_like: needles.join(",") } as any);
+                          out.places = capToolRows((byName.results || []) as any[]);
+                        }
+                      } }
                       // H1/M3 — the model is told WHY the place half is empty
                       // ("no_place_intent", "no_city_or_category") or that it
                       // FAILED, so it cannot narrate a top-8 it never received.
@@ -2138,7 +2145,14 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                   if (result.results) {
                     result.results = capToolRows(result.results);
                     // R23-4: "børneteater" places must be theatres, not a zoo.
-                    { const tws = nonGenreTopics(turnDiscovery(userMessages, ctx).intent.topicWords); if (tws.length) result.results = result.results.filter((p: any) => tws.some((w) => topicWordHit(p, w))); }
+                    { const tws = nonGenreTopics(turnDiscovery(userMessages, ctx).intent.topicWords); if (tws.length) {
+                      result.results = result.results.filter((p: any) => tws.some((w) => topicWordHit(p, w)));
+                      const needles = placeNameNeedles(tws);
+                      if (result.results.length === 0 && needles.length && fnArgs.city) {
+                        const byName = await searchPlaces(supabase, { city: fnArgs.city, name_like: needles.join(",") } as any);
+                        result.results = capToolRows((byName.results || []) as any[]);
+                      }
+                    } }
                     result.results.forEach((p: any) => {
                       if (!p?.id) return;
                       collectedPlaceIds.push(p.id);

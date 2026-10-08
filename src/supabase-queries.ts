@@ -271,6 +271,10 @@ export async function searchPlaces(
     const tagList = args.tags.split(",").map((t) => t.trim().toLowerCase());
     query = query.overlaps("tags", tagList);
   }
+  // R25: "caféer i København" — the name is the only trustworthy signal on
+  // places that carry the blanket restaurant+café+bar tag set.
+  const nameLike = String((args as any).name_like ?? "").split(",").map((t) => t.trim().replace(/[%,()*]/g, "")).filter(Boolean);
+  if (nameLike.length) query = query.or(nameLike.map((t) => `name.ilike.%${t}%`).join(","));
 
   const { data: ranked, error: rankError } = await query;
 

@@ -375,3 +375,6 @@ describe("r25c", () => {
     expect(topicWordHit({ name: "Morgenstedet", tags: "restaurant, mad, café, bar" }, "bar")).toBe(false);
   });
 });
+
+import { placeNameNeedles } from "./discovery-fallback";
+describe("r25d", () => { it("café name needles", () => { expect(placeNameNeedles(["café"])).toContain("kaffe"); }); });
