@@ -231,7 +231,7 @@ export function groundModelReply(
   modelText = modelText.replace(/^[ \t]*(?:let me (?:try (?:to )?)?(?:search(?:ing)?|look(?:ing)?)[^\n]*|lad mig (?:prøve at )?(?:søge|kigge)[^\n]*|jeg (?:prøver|søger) (?:igen|lige)[^\n]*)\n?/gim, "");
   // Template placeholders ("[jazz_steder København]") and empty checkboxes are
   // model scaffolding, never reader text.
-  modelText = modelText.replace(/\[[\p{L}_]+(?:\s+[\p{L}]+)*_[\p{L}_]*(?:\s+[\p{L}]+)*\]/gu, "").replace(/^\s*[-*]\s*\[\s?\]\s*/gmu, "- ");
+  modelText = modelText.replace(/\[[\p{L}_]+(?:\s+[\p{L}]+)*_[\p{L}_]*(?:\s+[\p{L}]+)*\]/gu, "").replace(/^\s*[-*]\s*\[\s?\]\s*/gmu, "- ").replace(/^[ \t]*\[[^\]\n]{1,60}\][ \t]*$/gmu, "");
   // "Her er nogle jazz-events: … Ingen resultater fundet." — an empty result
   // must not open with a claim that a list follows.
   if (sources.length === 0 && /(ingen\s+(?:resultater|events?)|no\s+results|found\s+no|fandt\s+ingen)/i.test(modelText)) {
