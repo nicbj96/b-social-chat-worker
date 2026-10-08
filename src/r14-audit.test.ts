@@ -267,3 +267,18 @@ describe("r23", () => {
     expect(topicWordHit({ title: "Vin & Vinyler" }, "stand-up")).toBe(false);
   });
 });
+
+import { honestEmptyReply } from "./discovery-fallback";
+describe("r24", () => {
+  it("empty answer names the right day from the window", () => {
+    const t = resolveTurnDiscovery(["jazz København", "hvad sker der dagen efter?"], undefined, new Date("2026-10-08T10:00:00Z"));
+    const r = honestEmptyReply(t.intent, "jazz", "da");
+    expect(r).toContain("fredag den 9. oktober");
+    expect(r).toContain("jazz-events i København");
+    expect(r).not.toMatch(/lørdag/);
+  });
+  it("stand-up dagen efter = lørdag", () => {
+    const t = resolveTurnDiscovery(["stand-up Aarhus i morgen", "og dagen efter?"], undefined, new Date("2026-10-08T10:00:00Z"));
+    expect(honestEmptyReply(t.intent, null, "da")).toContain("stand-up-events i Aarhus lørdag den 10. oktober");
+  });
+});

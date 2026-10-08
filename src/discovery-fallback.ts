@@ -827,3 +827,27 @@ export function nonGenreTopics(words?: string[]): string[] {
   const genreWords = new Set(Object.entries(GENRES).flatMap(([k, v]) => [k, ...v]));
   return (words ?? []).filter((w) => !genreWords.has(w));
 }
+
+/** Deterministic "nothing found" sentence: the date label comes from the window itself. */
+export function honestEmptyReply(intent: DiscoveryIntent, genre: string | null, lang: "da" | "en"): string {
+  const da = lang !== "en";
+  const topics = nonGenreTopics(intent.topicWords);
+  const what = genre
+    ? (da ? `${genre}-events` : `${genre} events`)
+    : topics.length ? (da ? `${topics[0]}-events` : `${topics[0]} events`)
+    : intent.queryTag && intent.queryTag !== "musik" ? (da ? `${intent.queryTag}-events` : `${intent.queryTag} events`)
+    : da ? "events" : "events";
+  const free = intent.free ? (da ? "gratis " : "free ") : "";
+  const where = intent.city ? (da ? ` i ${intent.city}` : ` in ${intent.city}`) : "";
+  let when = "";
+  const w = intent.dateWindow;
+  if (w) {
+    const from = new Date(w.from), to = new Date(Date.parse(w.to) - 1);
+    const fmt = (d: Date) => new Intl.DateTimeFormat(da ? "da-DK" : "en-GB", { timeZone: "Europe/Copenhagen", weekday: "long", day: "numeric", month: "long" }).format(d);
+    const a = fmt(from), b = fmt(to);
+    when = a === b ? (da ? ` ${a.replace(/^(\p{L}+) /u, "$1 den ")}` : ` on ${a}`) : (da ? ` fra ${a} til ${b}` : ` from ${a} to ${b}`);
+  }
+  return da
+    ? `Jeg fandt ingen ${free}${what}${where}${when} i B-Social-kataloget. Vil du prøve en anden dag, by eller type?`
+    : `I found no ${free}${what}${where}${when} in the B-Social catalogue. Want to try another day, city or kind of event?`;
+}
