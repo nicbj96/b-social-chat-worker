@@ -461,6 +461,13 @@ export function formatFallbackReply(
   relaxed: Relaxation[] = [],
 ) {
   const seenPlaces = new Set<string>();
+  // "meditation København": when some rows match the named topic, show only
+  // those (no bike paths next to the meditation sessions).
+  {
+    const tws = nonGenreTopics(intent.topicWords);
+    const hit = (r: any) => tws.some((w) => topicWordHit(r, w));
+    if (tws.length && [...places, ...events].some(hit)) { places = places.filter(hit); events = events.filter(hit); }
+  }
   const uniquePlaces = places.filter((place) => {
     if (!place.id || !place.name) return false;
     const key = `${place.name}|${place.city || ""}`.trim().toLocaleLowerCase("da-DK");
@@ -858,9 +865,10 @@ export function honestEmptyReply(intent: DiscoveryIntent, genre: string | null, 
   const topics = nonGenreTopics(intent.topicWords);
   const what = genre
     ? (da ? `${genre}-events` : `${genre} events`)
-    : topics.length ? (da ? `${topics[0]}-events` : `${topics[0]} events`)
+    : topics.length ? (intent.kind === "places" ? (da ? `steder med ${topics[0]}` : `${topics[0]} places`) : da ? `${topics[0]}-events` : `${topics[0]} events`)
     : intent.queryTag && intent.queryTag !== "musik" ? (da ? `${intent.queryTag}-events` : `${intent.queryTag} events`)
-    : da ? "events" : "events";
+    : intent.kind === "places" ? (da ? "steder" : "places")
+    : "events";
   const free = intent.free ? (da ? "gratis " : "free ") : "";
   const where = intent.city ? (da ? ` i ${intent.city}` : ` in ${intent.city}`) : "";
   let when = "";
