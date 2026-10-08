@@ -199,3 +199,12 @@ describe("r21", () => {
     expect(groundModelReply("Ingen jazz-events. [jazz_steder København]", [], { lang: "da" }).reply).not.toContain("[");
   });
 });
+
+import { inferResponseLanguage } from "./discovery-fallback";
+describe("r21b", () => {
+  it("English kids question is English", () => { expect(inferResponseLanguage("kids activities Aarhus Sunday")).toBe("en"); });
+  it("empty result drops 'Her er nogle' intro", () => {
+    const r = groundModelReply("Her er nogle jazz-events i København:\n\nIngen resultater fundet.", [], { lang: "da" });
+    expect(r.reply).not.toMatch(/Her er nogle/);
+  });
+});

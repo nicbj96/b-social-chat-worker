@@ -2073,6 +2073,10 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                   if (result?.results) result.results = capToolRows(result.results);
                   break;
                 case "search_places": {
+                  // A genre EVENT question ("elektronisk musik København") is not a
+                  // venue question: venue blurbs then read as genre claims. (Jazz clubs
+                  // are genuine jazz venues, so jazz keeps its places.)
+                  if (((g0) => g0 !== null && g0 !== "jazz")(chainGenre(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")))) && !/(?<!\p{L})(sted|steder|venue|klub|club|bar|spillested)/iu.test(latestUserMessage(userMessages))) { result = { results: [], places_skipped: "genre_event_question" }; break; }
                   // H1 — this tool filters on city, category and tags, and
                   // nothing else. A call that carries none of them is an
                   // unfiltered ORDER BY over the whole catalogue, i.e. the
