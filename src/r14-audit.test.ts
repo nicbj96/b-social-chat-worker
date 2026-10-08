@@ -80,3 +80,11 @@ describe("r16 M1: bullet titles with full stops", () => {
     expect(r.reply).not.toMatch(/\*\*AI & Digital Confidence\.\s*$/m);
   });
 });
+
+describe("r16 L2n: tool-loop narration", () => {
+  it("'Let me try searching again.' never reaches the reader", () => {
+    const r = groundModelReply("I found no kids events.\nLet me try searching again.\nWant something else?", [], { lang: "en" });
+    expect(r.reply).not.toMatch(/Let me try/i);
+    expect(r.reply).toContain("I found no kids events.");
+  });
+});
