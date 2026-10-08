@@ -310,7 +310,7 @@ export function isDiscoverySeekingMessage(message: string): boolean {
   const text = String(message || "").trim();
   if (!text) return false;
   const hasVerb = /\b(find|vis|søg|anbefal|show|recommend|search|looking for|hvad sker|hvad kan|er der)\b/iu.test(text);
-  const hasNoun = /\b(event|events|sted|steder|koncert|festival|jazz|aktivitet|aktiviteter|museum|restaurant|café|cafe|park|skov|turnering)\w*\b/iu.test(text);
+  const hasNoun = /\b(event|events|arrangement|sted|steder|koncert|festival|jazz|aktivitet|aktiviteter|museum|restaurant|café|cafe|park|skov|turnering)\w*\b/iu.test(text);
   const hasCity = /\b(kbh|cph|københavn|copenhagen|aarhus|århus|aalborg|ålborg|odense|malmö|malmo|frederikshavn|skagen|thisted)\b/iu.test(text);
   // "noget for børn på søndag i Aarhus" has no verb and no noun from the list
   // above, only a city, a category word and a date. That is still a discovery
@@ -318,7 +318,8 @@ export function isDiscoverySeekingMessage(message: string): boolean {
   // på lige nu" while the catalogue was perfectly able to answer.
   const hasCategory = CATEGORY_RULES.some((rule) => rule.test.test(text));
   const hasDate = resolveDateWindow(text) !== null;
-  return (hasVerb && (hasNoun || hasCity)) || (hasNoun && hasCity) || (hasCity && (hasCategory || hasDate));
+  // "børnearrangementer lørdag" names no city but is still a catalogue question.
+  return (hasVerb && (hasNoun || hasCity)) || (hasNoun && hasCity) || (hasCity && (hasCategory || hasDate)) || (hasDate && (hasCategory || hasNoun));
 }
 
 export type Relaxation = "date" | "category";
