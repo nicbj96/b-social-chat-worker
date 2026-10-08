@@ -80,6 +80,17 @@ describe("/chat model path — proposal, grounding, budget", () => {
     expect(body.filter_bbox_n).toBeTypeOf("number");
   });
 
+  it("tops up a date-bounded semantic turn from the city+date search", async () => {
+    const net = netStub(); vi.stubGlobal("fetch", net);
+    const ai = aiStub([
+      { tool_calls: [{ id: "t1", function: { name: "semantic_search", arguments: JSON.stringify({ query: "events", kind: "events", city: "Aarhus" }) } }] },
+      { response: "Her er weekenden." },
+    ]);
+    await chat(envWith(ai, net), { messages: [{ role: "user", content: "hvad sker der i aarhus i weekenden" }], current_intent: currentIntent });
+    const rest = net.mock.calls.map((c: any[]) => String(c[0])).filter((u: string) => u.includes("/rest/v1/events"));
+    expect(rest.some((u: string) => u.includes("date=lt."))).toBe(true);
+  });
+
   it("grounds the normal model reply: contradictory price corrected to the verified field with currency", async () => {
     const net = netStub(); vi.stubGlobal("fetch", net);
     const ai = aiStub([

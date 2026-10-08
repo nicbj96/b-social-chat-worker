@@ -1919,7 +1919,19 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                           filter_country: fnArgs.country ?? bbox?.country ?? null,
                           ...bboxParams,
                         }, () => { out.events_error = "rpc_failed"; });
-                        out.events = narrowSemanticEvents(out.events || [], bbox, inferDiscoveryIntent(latestUserMessage(userMessages)).dateWindow, 25, fnArgs.city).slice(0, 8);
+                        const turnWindow = inferDiscoveryIntent(latestUserMessage(userMessages)).dateWindow;
+                        out.events = narrowSemanticEvents(out.events || [], bbox, turnWindow, 25, fnArgs.city).slice(0, 8);
+                        // A date-bounded question ("i weekenden", "tonight") rarely
+                        // has its events in the semantic top-N. Top up from the
+                        // deterministic city+date search so the window is answered
+                        // with what is actually on, not "nothing found".
+                        if (turnWindow && out.events.length < 4) {
+                          const sup = await searchEvents(createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY), {
+                            ...(fnArgs.city ? { city: fnArgs.city } : {}), date_from: turnWindow.from, date_to: turnWindow.to,
+                          });
+                          const seen = new Set(out.events.map((e: any) => e?.id));
+                          for (const e of sup.results || []) if (e?.id && !seen.has(e.id) && out.events.length < 8) { out.events.push(e); seen.add(e.id); }
+                        }
                         // M41 row cap: the model is never handed more than one
                         // page; a cap is flagged, not hidden.
                         out.events = capToolRows(out.events);
