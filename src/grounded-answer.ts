@@ -237,6 +237,16 @@ export function groundModelReply(
   if (sources.length === 0 && /(ingen\s+(?:resultater|events?)|no\s+results|found\s+no|fandt\s+ingen)/i.test(modelText)) {
     modelText = modelText.split("\n").filter(l => !/^\s*(her\s+er\s+nogle|here\s+are\s+some)\b/i.test(l)).join("\n");
   }
+  // "* Ingen fundet" under "Her er et gratis event…" contradicts the cards:
+  // drop the placeholder bullet and, when rows exist, list them instead.
+  let droppedNone = false;
+  modelText = modelText.replace(/^[ \t]*[*•\-][ \t]*(?:ingen\s+(?:fundet|resultater|events?)|none\s+found|no\s+results)[.!]?[ \t]*$/gimu, () => { droppedNone = true; return ""; });
+  if (droppedNone && sources.length > 0 && !/^[ \t]*[*•\-][ \t]+\S/m.test(modelText)) {
+    modelText = `${modelText.trim()}\n${renderReaderFacts(sources, da ? "da" : "en").join("\n")}`;
+  } else if (droppedNone && sources.length === 0) {
+    modelText = modelText.split("\n").filter(l => !/^\s*(her\s+er|here\s+(?:is|are))\b/i.test(l)).join("\n");
+    if (!modelText.trim()) modelText = da ? "Jeg fandt ingen events, der matcher." : "I found no matching events.";
+  }
   if (!modelText.trim()) {
     return { reply: sources.length ? renderGroundedFacts(sources, da ? "da" : "en").join("\n") : "", grounding: sources.length ? "verified" : "flagged", corrections: [] };
   }

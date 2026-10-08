@@ -1293,7 +1293,11 @@ async function tagTruncatedResponse(res: Response, truncated: boolean): Promise<
 }
 
 function turnDiscovery(userMessages: ChatMessage[], context?: { user_prefs?: { city?: string } }) {
-  return resolveTurnDiscovery(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")), context?.user_prefs?.city);
+  const t = resolveTurnDiscovery(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")), context?.user_prefs?.city);
+  // "hvad sker der i aften" names no city: a Danish reader means Denmark,
+  // never a Duke flu clinic in North Carolina.
+  if (!t.intent.city && inferResponseLanguage(latestUserMessage(userMessages)) !== "en") t.intent.country = "DK";
+  return t;
 }
 
 async function directDiscoveryFallback(

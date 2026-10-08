@@ -11,6 +11,8 @@ export type DiscoveryIntent = {
   queryTag?: string;
   /** Resolved Europe/Copenhagen window for "på søndag", "i morgen", ... */
   dateWindow?: DateWindow;
+  /** Country restriction (a Danish question without a city means DK). */
+  country?: string;
   /** Specific topic words without a category mapping ("yoga"). */
   topicWords?: string[];
   /** Reader asked for free things only ("gratis", "free"). */
@@ -323,7 +325,7 @@ export function isDiscoverySeekingMessage(message: string): boolean {
 }
 
 export type Relaxation = "date" | "category";
-export type EventFilters = { city?: string; category?: string; tags?: string; date_from?: string; date_to?: string; free?: boolean };
+export type EventFilters = { city?: string; category?: string; tags?: string; date_from?: string; date_to?: string; free?: boolean; country?: string };
 
 /**
  * Event search that loosens gradually instead of answering empty while the
@@ -341,6 +343,7 @@ export async function searchEventsRelaxing(
     category: useSpecificTag ? undefined : intent.eventCategory,
     tags: useSpecificTag ? intent.queryTag : undefined,
     ...(intent.free ? { free: true } : {}),
+    ...(intent.country && !intent.city ? { country: intent.country } : {}),
   };
   const hasCategory = Boolean(base.category || base.tags);
   const steps: Array<{ filters: EventFilters; relaxed: Relaxation[] }> = [
@@ -354,7 +357,7 @@ export async function searchEventsRelaxing(
   ];
   if (intent.dateWindow) steps.push({ filters: base, relaxed: ["date"] });
   if (hasCategory) {
-    steps.push({ filters: { city: intent.city, ...(intent.free ? { free: true } : {}) }, relaxed: intent.dateWindow ? ["date", "category"] : ["category"] });
+    steps.push({ filters: { city: intent.city, ...(intent.free ? { free: true } : {}), ...(intent.country && !intent.city ? { country: intent.country } : {}) }, relaxed: intent.dateWindow ? ["date", "category"] : ["category"] });
   }
   let last: { results: any[]; error?: string; relaxed: Relaxation[] } = { results: [], relaxed: [] };
   for (const step of steps) {
@@ -547,7 +550,7 @@ export function formatFallbackReply(
           : copy.cityMissing;
       return `• ${place.name} — ${where}`;
     }),
-    ...selectedEvents.map((event) => `• ${event.title} — ${event.location || copy.locationMissing}${event.date ? ` (${event.date})` : ""}${intent.free ? (language === "en" ? " — Free" : " — Gratis") : ""}`),
+    ...selectedEvents.map((event) => `• ${event.title} — ${(event.location && !/^(none|null|undefined)$/i.test(String(event.location).trim()) ? event.location : "") || copy.locationMissing}${event.date ? ` (${event.date})` : ""}${intent.free ? (language === "en" ? " — Free" : " — Gratis") : ""}`),
   ].slice(0, intent.limit);
 
   // The reader asked for EVENTS and we are about to show only PLACES. Calling
@@ -731,7 +734,11 @@ export function resolveTurnDiscovery(userTexts: string[], contextCity?: string, 
       if (own.city) merged.city = own.city;
       if (own.dateWindow) merged.dateWindow = own.dateWindow;
       // "og dagen efter?" = the previous window shifted one day.
-      if (!own.dateWindow && merged.dateWindow && DAY_AFTER_RE.test(latest)) {
+      if (!own.dateWindow && !merged.dateWindow && DAY_AFTER_RE.test(latest)) {
+        // No earlier date means "today": the day after is tomorrow.
+        const tw = resolveDateWindow("i morgen", now);
+        if (tw) merged.dateWindow = { ...tw, label: "i morgen" };
+      } else if (!own.dateWindow && merged.dateWindow && DAY_AFTER_RE.test(latest)) {
         const shift = (iso: string) => new Date(Date.parse(iso) + 86_400_000).toISOString();
         merged.dateWindow = { from: shift(merged.dateWindow.from), to: shift(merged.dateWindow.to), label: latest.match(DAY_AFTER_RE)![0].toLowerCase() };
       }
