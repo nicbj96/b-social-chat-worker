@@ -36,3 +36,26 @@ describe("negated free statement", () => {
     expect(groundModelReply("Koncerten er gratis.", [], { lang: "da" }).grounding).toBe("corrected");
   });
 });
+
+import { resolveDateWindow } from "./date-window";
+import { danishWhen } from "./semantic-narrow";
+describe("r15 audit fixes", () => {
+  const now2 = new Date("2026-10-08T10:00:00Z");
+  it("N1: date from the middle of a follow-up chain is kept", () => {
+    const t = resolveTurnDiscovery(["what's on in copenhagen tonight", "and tomorrow?", "only free ones"], undefined, now2);
+    expect(t.intent.free).toBe(true);
+    expect(t.intent.dateWindow?.label).toBe("i morgen");
+  });
+  it("N2: explicit dates are windows and survive 'kun gratis'", () => {
+    expect(resolveDateWindow("events i aalborg den 15. oktober", now2)?.label).toBe("15. oktober");
+    expect(resolveDateWindow("concerts on october 15", now2)?.label).toBe("15. oktober");
+    expect(resolveDateWindow("noget d. 3/11", now2)?.label).toBe("3. november");
+    expect(resolveDateWindow("1. januar", now2)?.from.startsWith("2026-12-31T23")).toBe(true);
+    const t = resolveTurnDiscovery(["events i aalborg den 15. oktober", "kun gratis"], undefined, now2);
+    expect(t.intent.dateWindow?.label).toBe("15. oktober");
+  });
+  it("N3: UTC-midnight sentinel is not rendered as 02:00", () => {
+    expect(danishWhen("2026-10-10T00:00:00+00:00")).toContain("tidspunkt ukendt");
+    expect(danishWhen("2026-10-10T18:00:00+00:00")).toContain("kl. 20.00");
+  });
+});
