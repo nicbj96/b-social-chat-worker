@@ -127,3 +127,16 @@ describe("r18c", () => {
     expect(groundModelReply("Nothing found. Let me try to search again.", [], { lang: "en" }).reply).not.toMatch(/Let me/i);
   });
 });
+
+describe("r19", () => {
+  it("N7: yoga with no yoga rows says so", () => {
+    const r = formatFallbackReply({ kind: "events", city: "Aarhus", topicWords: ["yoga"], limit: 4 } as any, [], [{ id: "1", title: "Mad & Comedy", location: "Aarhus" } as any], "da", []);
+    expect(r.reply).toContain('Jeg fandt ikke noget med "yoga"');
+  });
+  it("N4: fuzzy duplicate facts are not appended", () => {
+    const src: any[] = [{ kind: "event", id: "1", verified_fields: { title: "Lørdagsrytmik 1-2 år", date: "2026-10-10T07:30:00Z", date_raw: "2026-10-10T07:30:00Z" } }, { kind: "event", id: "2", verified_fields: { title: "Real", date: "2026-10-10T09:00:00Z", date_raw: "2026-10-10T09:00:00Z" } }];
+    const r = groundModelReply("Her er:\n* Lørdagsrytmik for 1-2 år kl. 9:30\n* Fake Event kl. 12:00", src as any, { lang: "da" });
+    expect(r.grounding).toBe("corrected");
+    expect(r.reply).not.toMatch(/• Lørdagsrytmik/);
+  });
+});

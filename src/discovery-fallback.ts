@@ -11,6 +11,8 @@ export type DiscoveryIntent = {
   queryTag?: string;
   /** Resolved Europe/Copenhagen window for "på søndag", "i morgen", ... */
   dateWindow?: DateWindow;
+  /** Specific topic words without a category mapping ("yoga"). */
+  topicWords?: string[];
   /** Reader asked for free things only ("gratis", "free"). */
   free?: boolean;
   limit: number;
@@ -154,6 +156,12 @@ const CATEGORY_RULES = [
   { test: /\b(motion|fitness|løb|cykel|sport)\w*/iu, placeCategory: "motion-fitness", eventCategory: "sport", tag: "sport" },  // was "motion": 0 events carry it
 ] as const;
 
+const TOPIC_WORDS = ["yoga", "pilates", "dans", "salsa", "tango", "quiz", "standup", "stand-up", "comedy", "teater", "opera", "ballet", "foredrag", "workshop", "loppemarked", "marked", "brætspil", "gaming", "esport", "vinsmagning", "ølsmagning", "padel", "klatring", "løbetur", "maraton", "meditation", "poesi", "film", "biograf", "karaoke", "techno", "rock", "metal", "hiphop", "rap", "klassisk"];
+export function topicWordsOf(message: string): string[] {
+  const low = String(message || "").toLowerCase();
+  return TOPIC_WORDS.filter(w => new RegExp(`(?<!\\p{L})${w}`, "u").test(low));
+}
+
 export function inferDiscoveryIntent(message: string, contextCity?: string, now: Date = new Date()): DiscoveryIntent {
   const text = String(message || "").trim();
   const dateWindow = resolveDateWindow(text, now);
@@ -293,6 +301,7 @@ function fuzzyCity(text: string): string | undefined {
     if (kind !== "places") intent.eventCategory = category.eventCategory;
     intent.queryTag = category.test.test(text) && /jazz/iu.test(text) ? "jazz" : category.tag;
   }
+  { const tw = topicWordsOf(text); if (tw.length) intent.topicWords = tw; }
   return intent;
 }
 
@@ -548,9 +557,17 @@ export function formatFallbackReply(
   const substituting =
     intent.kind === "events" && selectedEvents.length === 0 && selectedPlaces.length > 0;
 
+  // A topic word we have no category for ("yoga") that no row mentions: say
+  // so instead of presenting comedy as the answer.
+  const missing = selectedEvents.length > 0 && intent.topicWords?.length
+    && !selectedEvents.some((e: any) => intent.topicWords!.some(w => `${e.title ?? ""} ${e.description ?? ""} ${(e.interest_tags ?? []).join(" ")}`.toLowerCase().includes(w)))
+    ? intent.topicWords.join(" ") : "";
+  const missingIntro = missing
+    ? (language === "en" ? `I found nothing matching "${missing}". Other events${intent.city ? ` in ${intent.city}` : ""}${intent.dateWindow ? ` (${intent.dateWindow.label})` : ""}:` : `Jeg fandt ikke noget med "${missing}". Andre events${intent.city ? ` i ${intent.city}` : ""}${intent.dateWindow ? ` (${intent.dateWindow.label})` : ""}:`)
+    : "";
   return {
     reply: lines.length > 0
-      ? `${relaxed.length > 0 && selectedEvents.length > 0 ? relaxedIntro : substituting ? `${copy.placesInstead}${intent.city ? ` ${copy.cityPrefix} ${intent.city}` : ""}:` : copy.intro}\n${lines.join("\n")}`
+      ? `${missingIntro ? missingIntro : relaxed.length > 0 && selectedEvents.length > 0 ? relaxedIntro : substituting ? `${copy.placesInstead}${intent.city ? ` ${copy.cityPrefix} ${intent.city}` : ""}:` : copy.intro}\n${lines.join("\n")}`
       : `${copy.noResults}${intent.city ? ` ${copy.cityPrefix} ${intent.city}` : ""} ${copy.selectedFilters}`,
     tool_calls_made: ["direct_discovery_fallback"],
     place_ids: selectedPlaces.map((place) => String(place.id)).slice(0, intent.limit),

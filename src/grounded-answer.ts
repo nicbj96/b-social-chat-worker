@@ -268,9 +268,17 @@ export function groundModelReply(
   const body = kept.join("").replace(/\n{3,}/g, "\n\n").trim();
   // Don't repeat a source the surviving text already lists.
   const lowBody = body.toLowerCase();
+  // Fuzzy: "Lørdagsrytmik for 1-2 år" in the prose already covers the source
+  // "Lørdagsrytmik 1-2 år" — repeating it in a second format reads as a duplicate.
+  const bodyWords = new Set(lowBody.split(/[^\p{L}\p{N}]+/u).filter(Boolean));
   const facts = renderReaderFacts(sources, da ? "da" : "en").filter(f => {
     const t = f.replace(/^•\s*/, "").split(" — ")[0].trim().toLowerCase();
-    return !t || !lowBody.includes(t);
+    if (!t) return false;
+    if (lowBody.includes(t)) return false;
+    const words = t.split(/[^\p{L}\p{N}]+/u).filter(w => w.length >= 3);
+    if (words.length === 0) return true;
+    const hit = words.filter(w => bodyWords.has(w)).length;
+    return hit / words.length < 0.6;
   });
   // A closing question ("Vil du have mere information…?") belongs after the
   // verified list, not between the intro and the bullets.
