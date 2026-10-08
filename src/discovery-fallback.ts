@@ -158,7 +158,7 @@ const CATEGORY_RULES = [
   { test: /\b(motion|fitness|løb|cykel|sport)\w*/iu, placeCategory: "motion-fitness", eventCategory: "sport", tag: "sport" },  // was "motion": 0 events carry it
 ] as const;
 
-const TOPIC_WORDS = ["yoga", "pilates", "dans", "salsa", "tango", "quiz", "standup", "stand-up", "comedy", "teater", "opera", "ballet", "foredrag", "workshop", "loppemarked", "marked", "brætspil", "gaming", "esport", "vinsmagning", "ølsmagning", "padel", "klatring", "løbetur", "maraton", "meditation", "poesi", "film", "biograf", "karaoke", "techno", "rock", "metal", "hiphop", "rap", "klassisk"];
+const TOPIC_WORDS = ["legeplads", "yoga", "pilates", "dans", "salsa", "tango", "quiz", "standup", "stand-up", "comedy", "teater", "opera", "ballet", "foredrag", "workshop", "loppemarked", "marked", "brætspil", "gaming", "esport", "vinsmagning", "ølsmagning", "padel", "klatring", "løbetur", "maraton", "meditation", "poesi", "film", "biograf", "karaoke", "techno", "rock", "metal", "hiphop", "rap", "klassisk"];
 export function topicWordsOf(message: string): string[] {
   const low = String(message || "").toLowerCase();
   // "børneteater"/"dukketeater" are theatre: compound heads count for these.
@@ -566,6 +566,14 @@ export function formatFallbackReply(
     ...selectedEvents.map((event) => `• ${event.title} — ${(event.location && !/^(none|null|undefined)$/i.test(String(event.location).trim()) ? event.location : "") || copy.locationMissing}${event.date ? ` (${event.date})` : ""}${intent.free ? (language === "en" ? " — Free" : " — Gratis") : ""}`),
   ].slice(0, intent.limit);
 
+  // R24: a named topic ("legepladser", "meditation") that no row matches is
+  // an honest empty answer, not shelters and library courses.
+  {
+    const tws = nonGenreTopics(intent.topicWords);
+    if (tws.length && ![...selectedPlaces, ...selectedEvents].some((r: any) => tws.some((w) => topicWordHit(r, w)))) {
+      return { reply: honestEmptyReply(intent, null, language === "en" ? "en" : "da"), tool_calls_made: ["direct_discovery_fallback"], place_ids: [], event_ids: [], suggested_tag_slugs: [], sources: [] } as any;
+    }
+  }
   // The reader asked for EVENTS and we are about to show only PLACES. Calling
   // that "results directly from B-Social" presents a substitution as an answer:
   // "quidditch-turneringer i Thisted" came back listing nature spots under that
@@ -828,6 +836,7 @@ const TOPIC_SYNONYMS: Record<string, string[]> = {
   standup: ["stand-up", "standup", "stand up", "comedy", "komik"],
   comedy: ["stand-up", "standup", "comedy", "komik"],
   teater: ["teater", "theatre", "theater", "forestilling"],
+  legeplads: ["legeplads", "playground", "legepark"],
   "børneteater": ["børneteater", "dukketeater", "børneforestilling", "familieforestilling", "teater for børn", "forestilling for børn"],
 };
 /** A row mentions the topic word (or a close synonym). */

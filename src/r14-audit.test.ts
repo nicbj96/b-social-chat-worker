@@ -131,7 +131,8 @@ describe("r18c", () => {
 describe("r19", () => {
   it("N7: yoga with no yoga rows says so", () => {
     const r = formatFallbackReply({ kind: "events", city: "Aarhus", topicWords: ["yoga"], limit: 4 } as any, [], [{ id: "1", title: "Mad & Comedy", location: "Aarhus" } as any], "da", []);
-    expect(r.reply).toContain('Jeg fandt ikke noget med "yoga"');
+    expect(r.reply).toContain("Jeg fandt ingen yoga-events i Aarhus");
+    expect(r.reply).not.toContain("Mad & Comedy");
   });
   it("N4: fuzzy duplicate facts are not appended", () => {
     const src: any[] = [{ kind: "event", id: "1", verified_fields: { title: "Lørdagsrytmik 1-2 år", date: "2026-10-10T07:30:00Z", date_raw: "2026-10-10T07:30:00Z" } }, { kind: "event", id: "2", verified_fields: { title: "Real", date: "2026-10-10T09:00:00Z", date_raw: "2026-10-10T09:00:00Z" } }];
@@ -311,4 +312,8 @@ describe("r24d", () => {
     expect(topicWordHit({ title: "Late Night Comedy", interest_tags: ["teater", "stand-up"] }, "børneteater")).toBe(false);
     expect(topicWordHit({ title: "Dukketeater: Rødhætte" }, "børneteater")).toBe(true);
   });
+});
+
+describe("r24e", () => {
+  it("legepladser is a topic", () => { expect(topicWordsOf("legepladser i Odense")).toContain("legeplads"); });
 });
