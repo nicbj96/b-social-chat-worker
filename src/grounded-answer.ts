@@ -24,6 +24,21 @@ export interface GroundedToolResult { kind: "event" | "place"; retrieved_at: str
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/**
+ * search_events returns display fields (date = "lørdag den 10. oktober 2026 kl.
+ * 22.00", price = "Pris ukendt") next to the raw values (date_raw, price_amount,
+ * currency). Grounding must compare against the raw values, or every correct
+ * time/price the model repeats looks contradictory.
+ */
+function normalizeEvidence(row: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...row };
+  if (typeof row.date_raw === "string" && Number.isFinite(Date.parse(row.date_raw))) out.date = row.date_raw;
+  if (typeof row.price_amount === "number" && Number.isFinite(row.price_amount)) out.price = row.price_amount;
+  else if (typeof row.price === "string") delete out.price;
+  if (typeof row.currency === "string" && !out.price_currency) out.price_currency = row.currency;
+  return out;
+}
+
 export function buildGroundedSources(results: GroundedToolResult[]): GroundedSource[] {
   const out: GroundedSource[] = [];
   for (const result of results) {
@@ -34,7 +49,7 @@ export function buildGroundedSources(results: GroundedToolResult[]): GroundedSou
       const upstream = row.source_updated_at ?? row.catalog_updated_at ?? row.updated_at ?? null;
       out.push({
         id, kind: result.kind, url: `/${result.kind === "event" ? "event" : "sted"}/${id}`,
-        verified_fields: { ...row, id, [result.kind === "event" ? "title" : "name"]: title },
+        verified_fields: normalizeEvidence({ ...row, id, [result.kind === "event" ? "title" : "name"]: title }),
         retrieved_at: result.retrieved_at,
         source_updated_at: typeof upstream === "string" && Number.isFinite(Date.parse(upstream)) ? upstream : null,
       });
@@ -140,7 +155,10 @@ function sentenceViolates(sentence: string, sources: GroundedSource[], lang: "da
     const bare = sentence.match(/\b(?:koster|pris|price|costs)\s*(\d+(?:[.,]\d+)?)/i);
     if (bare) return "price_without_verified_field";
   }
-  if (GRATIS_RE.test(sentence) && !evidenceFree(sources)) return "unverified_free_claim";
+  // A title like "DANS - FREE YOUR FEET" is not a price claim: test the
+  // sentence with every evidence title masked out.
+  const untitled = titles.reduce((acc, t) => (t ? acc.split(t).join(" ") : acc), sentence.toLowerCase());
+  if (GRATIS_RE.test(untitled) && !evidenceFree(sources)) return "unverified_free_claim";
   const clock = sentence.match(CLOCK_RE);
   if (clock) {
     const minutes = Number(clock[1]) * 60 + Number(clock[2]);
