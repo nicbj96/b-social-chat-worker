@@ -167,7 +167,10 @@ function sentenceViolates(sentence: string, allSources: GroundedSource[], lang: 
   // A title like "DANS - FREE YOUR FEET" is not a price claim: test the
   // sentence with every evidence title masked out.
   const untitled = titles.reduce((acc, t) => (t ? acc.split(t).join(" ") : acc), sentence.toLowerCase());
-  if (GRATIS_RE.test(untitled) && !evidenceFree(sources)) return "unverified_free_claim";
+  // "Der er ingen gratis events i Aalborg" is the honest empty answer, not a
+  // free-price claim about any row.
+  const negated = /(?<!\p{L})(?:ingen|ikke|no|not|none|aren't|isn't)(?!\p{L})/iu.test(untitled);
+  if (GRATIS_RE.test(untitled) && !negated && !evidenceFree(sources)) return "unverified_free_claim";
   const clock = sentence.match(CLOCK_RE);
   if (clock) {
     const minutes = Number(clock[1]) * 60 + Number(clock[2]);
