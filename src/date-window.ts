@@ -82,15 +82,23 @@ export function resolveDateWindow(message: string, now: Date = new Date()): Date
   const text = String(message || "");
   const today = localYmd(now);
 
-  if (/(?<!\p{L})i\s?aften(?!\p{L})/iu.test(text)) {
+  if (/(?<!\p{L})(?:i\s?aften|tonight|this evening)(?!\p{L})/iu.test(text)) {
     return {
       from: new Date(localInstant(today, 17)).toISOString(),
       to: new Date(localInstant(addDays(today, 1))).toISOString(),
       label: "i aften",
     };
   }
-  if (/(?<!\p{L})i\s?morgen(?!\p{L})/iu.test(text)) return dayWindow(addDays(today, 1), "i morgen");
-  if (/(?<!\p{L})i\s?dag(?!\p{L})/iu.test(text)) return dayWindow(today, "i dag");
+  if (/(?<!\p{L})(?:i\s?morgen|tomorrow)(?!\p{L})/iu.test(text)) return dayWindow(addDays(today, 1), "i morgen");
+  if (/(?<!\p{L})(?:i\s?dag|today)(?!\p{L})/iu.test(text)) return dayWindow(today, "i dag");
+  if (/(?<!\p{L})(?:(?:i\s)?denne\s+uge|i\s+ugen|this\s+week)(?!\p{L})/iu.test(text)) {
+    // Now -> next Monday 00:00 local.
+    return {
+      from: now.toISOString(),
+      to: new Date(localInstant(addDays(today, ((8 - today.dow) % 7) || 7))).toISOString(),
+      label: "denne uge",
+    };
+  }
 
   for (const wd of WEEKDAYS) {
     if (wd.re.test(text)) return dayWindow(addDays(today, (wd.dow - today.dow + 7) % 7), wd.label);
