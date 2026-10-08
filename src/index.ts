@@ -2038,6 +2038,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                   } else {
                     result = await searchEvents(supabase, fnArgs);
                   }
+                  console.log(JSON.stringify({ event: "search_events_args", args: { city: fnArgs?.city ?? null, category: fnArgs?.category ?? null, tags: fnArgs?.tags ?? null, free: fnArgs?.free ?? null, country: fnArgs?.country ?? null, date_from: fnArgs?.date_from ?? null, date_to: fnArgs?.date_to ?? null }, rows: (result?.results || []).length, error: result?.error ?? null }));
                   if (result.results) {
                     result.results = capToolRows(result.results);
                     // A named genre ("jazz") is the answer's subject: drop nu-metal etc.
