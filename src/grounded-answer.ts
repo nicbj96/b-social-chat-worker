@@ -92,20 +92,34 @@ function evidencePriceNumbers(sources: GroundedSource[]): number[] {
 }
 function evidenceFree(sources: GroundedSource[]): boolean { return sources.some(s => s.verified_fields.price === 0); }
 function evidenceTitleList(sources: GroundedSource[]): string[] { return sources.map(s => String(s.verified_fields[s.kind === "event" ? "title" : "name"]).toLowerCase()); }
+function cphParts(d: string): { day: number; month: number; minutes: number } | null {
+  if (!Number.isFinite(Date.parse(d))) return null;
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Copenhagen", day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date(d));
+  const n = (t: string) => Number(parts.find(p => p.type === t)?.value);
+  const hour = n("hour") % 24;
+  return { day: n("day"), month: n("month"), minutes: hour * 60 + n("minute") };
+}
+
+/** Clock minutes per source, both as stored (UTC) and as the reader's Danish wall time. */
 function evidenceClockMinutes(sources: GroundedSource[]): number[] {
   return sources.flatMap(s => {
     const d = s.verified_fields.date;
     if (typeof d !== "string" || !Number.isFinite(Date.parse(d))) return [];
     const dt = new Date(d);
-    return [dt.getUTCHours() * 60 + dt.getUTCMinutes()];
+    const local = cphParts(d);
+    return [dt.getUTCHours() * 60 + dt.getUTCMinutes(), ...(local ? [local.minutes] : [])];
   });
 }
-function evidenceDayMonth(source: GroundedSource | undefined): { day: number; month: number } | null {
-  if (!source) return null;
-  const d = source.verified_fields?.date;
-  if (typeof d !== "string" || !Number.isFinite(Date.parse(d))) return null;
-  const dt = new Date(d);
-  return { day: dt.getUTCDate(), month: dt.getUTCMonth() + 1 };
+
+/** Day/month per source (UTC and Danish wall date). */
+function evidenceDayMonths(sources: GroundedSource[]): { day: number; month: number }[] {
+  return sources.flatMap(s => {
+    const d = s.verified_fields?.date;
+    if (typeof d !== "string" || !Number.isFinite(Date.parse(d))) return [];
+    const dt = new Date(d);
+    const local = cphParts(d);
+    return [{ day: dt.getUTCDate(), month: dt.getUTCMonth() + 1 }, ...(local ? [{ day: local.day, month: local.month }] : [])];
+  });
 }
 
 function sentenceViolates(sentence: string, sources: GroundedSource[], lang: "da" | "en"): string | null {
@@ -138,8 +152,8 @@ function sentenceViolates(sentence: string, sources: GroundedSource[], lang: "da
     const day = dateClaim[1] ? Number(dateClaim[1]) : Number(dateClaim[4]);
     const monthName = (dateClaim[2] ?? dateClaim[3] ?? "").toLowerCase();
     const month = MONTHS_DA[monthName] ?? MONTHS_EN[monthName];
-    const ev = sources[0] ? evidenceDayMonth(sources[0]) : null;
-    if (ev && (ev.day !== day || ev.month !== month)) return "contradictory_date";
+    const ev = evidenceDayMonths(sources);
+    if (ev.length > 0 && !ev.some(e => e.day === day && e.month === month)) return "contradictory_date";
   }
   return null;
 }
@@ -185,18 +199,19 @@ export function groundModelReply(
   if (!modelText.trim()) {
     return { reply: sources.length ? renderGroundedFacts(sources, da ? "da" : "en").join("\n") : "", grounding: sources.length ? "verified" : "flagged", corrections: [] };
   }
-  const sentences = modelText.split(/(?<=[.!?])\s+/);
+  // Split into claims without breaking "10. oktober kl. 22.00": boundaries are
+  // newlines, or sentence punctuation followed by an uppercase/bullet start.
+  // Separators are kept so surviving text is rebuilt exactly as written.
+  const parts = modelText.split(/(\n+|(?<=[.!?])[ \t]+(?=[\p{Lu}*•\-"]))/u);
   const kept: string[] = [];
   const corrections: string[] = [];
-  let prevRemoved = false;
-  for (const sentence of sentences) {
-    // "250 kr. i døren." splits after the abbreviation; a lowercase tail of a
-    // removed sentence is part of that sentence, not a new claim.
-    if (prevRemoved && /^\p{Ll}/u.test(sentence.trim())) continue;
-    const violation = sentenceViolates(sentence, sources, da ? "da" : "en");
-    prevRemoved = Boolean(violation);
-    if (!violation) kept.push(sentence);
-    else if (!corrections.some(c => c.startsWith(violation))) {
+  for (let i = 0; i < parts.length; i += 2) {
+    const sentence = parts[i] ?? "";
+    const sep = parts[i + 1] ?? "";
+    const violation = sentence.trim() ? sentenceViolates(sentence, sources, da ? "da" : "en") : null;
+    if (!violation) { kept.push(sentence + sep); continue; }
+    if (sep.includes("\n")) kept.push("\n");
+    if (!corrections.some(c => c.startsWith(violation))) {
       corrections.push(violation === "invented_entity"
         ? (da ? "Opdigtede resultater er fjernet; kun verificerede katalogsvar vises." : "Invented results were removed; only verified catalogue answers are shown.")
         : da ? `Modstridende oplysning er korrigeret fra verificerede felter (${violation}).` : `Contradicting information was corrected from verified fields (${violation}).`);
@@ -207,5 +222,6 @@ export function groundModelReply(
   // (retrieved_at / source_updated_at) stays in the structured `sources`
   // payload and the cards — it is not chat prose.
   const facts = renderReaderFacts(sources, da ? "da" : "en");
-  return { reply: [...kept, ...facts].filter(Boolean).join("\n"), grounding: "corrected", corrections };
+  const body = kept.join("").replace(/\n{3,}/g, "\n\n").trim();
+  return { reply: [body, ...facts].filter(Boolean).join("\n"), grounding: "corrected", corrections };
 }
