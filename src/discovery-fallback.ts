@@ -163,7 +163,9 @@ export function topicWordsOf(message: string): string[] {
   const low = String(message || "").toLowerCase();
   // "børneteater"/"dukketeater" are theatre: compound heads count for these.
   const COMPOUND_OK = new Set(["teater", "foredrag", "workshop", "koncert"]);
-  return TOPIC_WORDS.filter(w => new RegExp(COMPOUND_OK.has(w) ? w : `(?<!\\p{L})${w}`, "u").test(low));
+  const hits = TOPIC_WORDS.filter(w => new RegExp(COMPOUND_OK.has(w) ? w : `(?<!\\p{L})${w}`, "u").test(low));
+  // "børneteater" is narrower than "teater": comedy clubs tagged teater are not it.
+  return /b[øo]rne(?:teater|forestilling)/u.test(low) ? ["børneteater", ...hits.filter(w => w !== "teater")] : hits;
 }
 
 export function inferDiscoveryIntent(message: string, contextCity?: string, now: Date = new Date()): DiscoveryIntent {
@@ -826,6 +828,7 @@ const TOPIC_SYNONYMS: Record<string, string[]> = {
   standup: ["stand-up", "standup", "stand up", "comedy", "komik"],
   comedy: ["stand-up", "standup", "comedy", "komik"],
   teater: ["teater", "theatre", "theater", "forestilling"],
+  "børneteater": ["børneteater", "dukketeater", "børneforestilling", "familieforestilling", "teater for børn", "forestilling for børn"],
 };
 /** A row mentions the topic word (or a close synonym). */
 export function topicWordHit(row: Record<string, any>, word: string): boolean {
