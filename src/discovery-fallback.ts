@@ -56,7 +56,7 @@ type EventResult = { id?: string; title?: string; location?: string; date?: stri
 const DANISH_LETTERS = /[æøå]/iu;
 
 const DANISH_WORDS =
-  /\b(hvad|hvor|hvornår|hvilke|gratis|koncerter?|morgen|udstillinger?|teater|foredrag|jeg|ikke|noget|sker|kan|vil|skal|der|det|den|og|på|til|er|en|et|som|har|gerne|lidt|mig|dig|min|din|vise|find(?:e)?r|steder|aften|weekenden|nær|tak|hej)\b/giu;
+  /\b(hvad|hvor|hvornår|hvilke|gratis|oktober|januar|februar|marts|maj|juni|juli|koncerter?|morgen|udstillinger?|teater|foredrag|jeg|ikke|noget|sker|kan|vil|skal|der|det|den|og|på|til|er|en|et|som|har|gerne|lidt|mig|dig|min|din|vise|find(?:e)?r|steder|aften|weekenden|nær|tak|hej)\b/giu;
 
 const ENGLISH_WORDS =
   /\b(the|kids|activities|sunday|monday|tuesday|wednesday|thursday|friday|saturday|concerts?|music|events?|for|in|on|is|are|was|what|where|when|how|why|you|your|yours|me|my|mine|want|any|good|some|something|anything|there|their|give|ideas|happening|free|help|hello|hi|hey|please|show|near|nearby|around|this|these|those|tonight|tomorrow|today|weekend|looking|recommend|suggest|can|could|would|should|do|does|did|going|go|out|about|thanks|thank|in|of|on|from|with)\b/giu;
@@ -321,7 +321,7 @@ export function isDiscoverySeekingMessage(message: string): boolean {
   const text = String(message || "").trim();
   if (!text) return false;
   const hasVerb = /\b(find|vis|søg|anbefal|show|recommend|search|looking for|hvad sker|hvad kan|er der)\b/iu.test(text);
-  const hasNoun = /\b(event|events|activit|arrangement|sted|steder|koncert|festival|jazz|aktivitet|aktiviteter|museum|museer|restaurant|café|cafe|caféer|bar|barer|pub|værtshus|natteliv|park|skov|turnering)\w*\b/iu.test(text);
+  const hasNoun = /\b(event|events|activit|arrangement|sted|steder|koncert|festival|jazz|aktivitet|aktiviteter|museum|museer|restaurant|café|cafe|caféer|bar|barer|pub|værtshus|natteliv|park|skov|turnering|biograf|film|teater|foredrag|marked|markeder|workshop)\w*\b/iu.test(text);
   // A bare genre ("techno") is a catalogue question; follow-ups inherit it.
   if (/^\s*(?:techno|jazz|house|rock|metal|hiphop|hip-hop|rap|elektronisk(?:\s+musik)?|klassisk(?:\s+musik)?)\s*[?!.]*\s*$/iu.test(text)) return true;
   const hasCity = /\b(kbh|cph|københavn|copenhagen|aarhus|århus|aalborg|ålborg|odense|roskilde|esbjerg|vejle|kolding|horsens|randers|malmö|malmo|frederikshavn|skagen|thisted)\b/iu.test(text);
@@ -332,7 +332,7 @@ export function isDiscoverySeekingMessage(message: string): boolean {
   const hasCategory = CATEGORY_RULES.some((rule) => rule.test.test(text));
   const hasDate = resolveDateWindow(text) !== null;
   // "børnearrangementer lørdag" names no city but is still a catalogue question.
-  return (hasVerb && (hasNoun || hasCity)) || (hasNoun && hasCity) || (hasCity && (hasCategory || hasDate)) || (hasDate && (hasCategory || hasNoun));
+  return (hasVerb && (hasNoun || hasCity || hasDate)) || (hasNoun && hasCity) || (hasCity && (hasCategory || hasDate)) || (hasDate && (hasCategory || hasNoun));
 }
 
 export type Relaxation = "date" | "category";
@@ -816,6 +816,7 @@ export function clarifyDiscoveryReply(lang: "da" | "en") {
 /** Named music genres and the words that prove a row is that genre. */
 export const GENRES: Record<string, string[]> = {
   jazz: ["jazz"],
+  techno: ["techno", "tekno", "rave", "elektronisk", "electronic", "electronica"],
   elektronisk: ["elektronisk", "electronic", "electronica", "techno", "house", "dj", "rave", "elektro"],
   rock: ["rock"],
   metal: ["metal"],
@@ -826,7 +827,8 @@ export const GENRES: Record<string, string[]> = {
 export function namedGenre(message: string): string | null {
   const low = String(message || "").toLowerCase();
   if (/(?<!\p{L})jazz/u.test(low)) return "jazz";
-  if (/(?<!\p{L})(elektronisk|electronic|techno|house\s*musik)/u.test(low)) return "elektronisk";
+  if (/(?<!\p{L})techno/u.test(low)) return "techno";
+  if (/(?<!\p{L})(elektronisk|electronic|house\s*musik)/u.test(low)) return "elektronisk";
   if (/(?<!\p{L})(heavy\s*)?metal(?!\p{L})/u.test(low)) return "metal";
   if (/(?<!\p{L})rock(?!\p{L})/u.test(low)) return "rock";
   if (/(?<!\p{L})(hiphop|hip-hop|hip hop|rap)(?!\p{L})/u.test(low)) return "hiphop";
@@ -857,6 +859,7 @@ const TOPIC_SYNONYMS: Record<string, string[]> = {
   museum: ["museum", "museer", "museet", "museums"],
   dans: ["dans", "danse", "dansen", "danser", "dance", "folkedans", "familiedans", "salsa", "tango", "swing", "ballet"],
   film: ["film", "filmaften", "biograf", "cinema", "kino"],
+  biograf: ["biograf", "cinema", "kino", "bio"],
   marked: ["marked", "markedet", "loppemarked", "julemarked", "market"],
   "børneteater": ["børneteater", "dukketeater", "børneforestilling", "familieforestilling", "teater for børn", "forestilling for børn"],
 };
@@ -915,9 +918,19 @@ export function honestEmptyReply(intent: DiscoveryIntent, genre: string | null, 
 const PLACE_NAME_NEEDLES: Record<string, string[]> = {
   "café": ["café", "cafe", "kaffe", "coffee", "espresso"],
   bar: [" bar", "bar ", "pub", "bodega", "værtshus", "cocktail", "vinbar", "ølbar"],
-  museum: ["museum", "museet"],
+  museum: ["museum", "museet", "museer"],
+  biograf: ["biograf", "bio ", "cinema", "kino", "palads", "grand teatret", "vester vov vov", "empire bio", "nordisk film"],
   legeplads: ["legeplads"],
 };
 export function placeNameNeedles(words: string[]): string[] {
   return Array.from(new Set(words.flatMap((w) => PLACE_NAME_NEEDLES[w] ?? [])));
+}
+
+/** Place-type words that only make sense for places ("museum", "biograf"). */
+export function placeTopicsOf(texts: string[]): string[] {
+  const low = texts.join(" ").toLowerCase();
+  const out: string[] = [];
+  if (/(?<!\p{L})muse(?:um|er|et|erne|ums)(?!\p{L})/u.test(low)) out.push("museum");
+  if (/(?<!\p{L})(?:biograf\p{L}*|cinemas?|kino)(?!\p{L})/u.test(low)) out.push("biograf");
+  return out;
 }
