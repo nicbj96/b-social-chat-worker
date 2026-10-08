@@ -132,3 +132,26 @@ describe("groundModelReply — Danish date/time prose", () => {
     expect(out.reply).not.toMatch(/den 10\.\noktober/);
   });
 });
+
+describe("grounding against search_events display rows", () => {
+  const row = { id: "33333333-3333-4333-8333-333333333333", title: "Vin & Vinyler", date: "lørdag den 10. oktober 2026 kl. 22.00", date_raw: "2026-10-10T20:00:00+00:00", price: "Pris ukendt", price_amount: null, currency: null };
+  const free = { id: "44444444-4444-4444-8444-444444444444", title: "DANS - FREE YOUR FEET", date: "x", date_raw: "2026-10-25T14:00:00+00:00", price: "100 DKK", price_amount: 100, currency: "DKK" };
+  const sources = buildGroundedSources([{ kind: "event", retrieved_at: "2026-10-08T00:00:00Z", rows: [row, free] }]);
+  it("accepts the correct Danish wall time from date_raw", () => {
+    const out = groundModelReply("* Vin & Vinyler på Bellis lørdag den 10. oktober kl. 22.00 - god vin 🍷", sources, { lang: "da" });
+    expect(out.grounding).toBe("verified");
+  });
+  it("a title containing FREE is not a free-price claim", () => {
+    const out = groundModelReply("* DANS - FREE YOUR FEET søndag den 25. oktober kl. 15.00", sources, { lang: "da" });
+    expect(out.grounding).toBe("verified");
+  });
+  it("still rejects a gratis claim and a wrong time", () => {
+    expect(groundModelReply("DANS - FREE YOUR FEET er gratis.", sources, { lang: "da" }).grounding).toBe("corrected");
+    expect(groundModelReply("Vin & Vinyler kl. 07.00.", sources, { lang: "da" }).grounding).toBe("corrected");
+  });
+  it("uses the numeric price with currency from the raw fields", () => {
+    expect(sources[1].verified_fields.price).toBe(100);
+    expect(sources[1].verified_fields.price_currency).toBe("DKK");
+    expect(sources[0].verified_fields.price).toBeUndefined();
+  });
+});
