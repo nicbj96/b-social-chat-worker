@@ -297,10 +297,18 @@ describe("r24b", () => {
 
 import { topicWordsOf } from "./discovery-fallback";
 describe("r24c", () => {
-  it("børneteater is a theatre topic", () => { expect(topicWordsOf("børneteater Aarhus")).toContain("teater"); });
+  it("børneteater is a theatre topic", () => { expect(topicWordsOf("børneteater Aarhus")).toContain("børneteater"); });
   it("meditation tag tried first", async () => {
     const seen: any[] = [];
     await searchEventsRelaxing({ kind: "events", city: "København", topicWords: ["meditation"], limit: 4 } as any, async (f) => { seen.push(f); return { results: f.tags === "meditation" ? [{ id: "m" }] : [] }; });
     expect(seen[0].tags).toBe("meditation");
+  });
+});
+
+describe("r24d", () => {
+  it("børneteater excludes adult comedy tagged teater", () => {
+    expect(topicWordsOf("børneteater Aarhus")).toEqual(["børneteater"]);
+    expect(topicWordHit({ title: "Late Night Comedy", interest_tags: ["teater", "stand-up"] }, "børneteater")).toBe(false);
+    expect(topicWordHit({ title: "Dukketeater: Rødhætte" }, "børneteater")).toBe(true);
   });
 });
