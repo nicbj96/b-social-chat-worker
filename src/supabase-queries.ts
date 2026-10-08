@@ -107,6 +107,7 @@ export async function searchEvents(
     const tagList = args.tags.split(",").map((t) => t.trim().toLowerCase());
     query = query.overlaps("interest_tags", tagList);
   }
+  if ((args as any).free === true) query = query.eq("price", 0);
 
   const { data, error } = await query
     .order("date", { ascending: true })

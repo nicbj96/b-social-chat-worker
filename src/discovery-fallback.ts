@@ -11,6 +11,8 @@ export type DiscoveryIntent = {
   queryTag?: string;
   /** Resolved Europe/Copenhagen window for "på søndag", "i morgen", ... */
   dateWindow?: DateWindow;
+  /** Reader asked for free things only ("gratis", "free"). */
+  free?: boolean;
   limit: number;
 };
 
@@ -311,7 +313,7 @@ export function isDiscoverySeekingMessage(message: string): boolean {
 }
 
 export type Relaxation = "date" | "category";
-export type EventFilters = { city?: string; category?: string; tags?: string; date_from?: string; date_to?: string };
+export type EventFilters = { city?: string; category?: string; tags?: string; date_from?: string; date_to?: string; free?: boolean };
 
 /**
  * Event search that loosens gradually instead of answering empty while the
@@ -328,6 +330,7 @@ export async function searchEventsRelaxing(
     city: intent.city,
     category: useSpecificTag ? undefined : intent.eventCategory,
     tags: useSpecificTag ? intent.queryTag : undefined,
+    ...(intent.free ? { free: true } : {}),
   };
   const hasCategory = Boolean(base.category || base.tags);
   const steps: Array<{ filters: EventFilters; relaxed: Relaxation[] }> = [
@@ -341,7 +344,7 @@ export async function searchEventsRelaxing(
   ];
   if (intent.dateWindow) steps.push({ filters: base, relaxed: ["date"] });
   if (hasCategory) {
-    steps.push({ filters: { city: intent.city }, relaxed: intent.dateWindow ? ["date", "category"] : ["category"] });
+    steps.push({ filters: { city: intent.city, ...(intent.free ? { free: true } : {}) }, relaxed: intent.dateWindow ? ["date", "category"] : ["category"] });
   }
   let last: { results: any[]; error?: string; relaxed: Relaxation[] } = { results: [], relaxed: [] };
   for (const step of steps) {
@@ -372,7 +375,11 @@ export async function searchEventsRelaxing(
 export function formatNonCatalogueReply(message: string) {
   const language = inferResponseLanguage(message);
   return {
-    reply: language === "en"
+    // A bare filter ("kun gratis") is a discovery question missing its place:
+    // ask for it instead of blaming an outage.
+    reply: FREE_RE.test(message)
+      ? (language === "en" ? "Free things where? Tell me a city (and maybe a day), and I'll find what's on." : "Gratis hvor? Skriv en by (og evt. en dag), så finder jeg, hvad der sker.")
+      : language === "en"
       ? "I can't answer that right now — please try again in a moment."
       : "Det kan jeg ikke svare på lige nu — prøv igen om lidt.",
     tool_calls_made: [],
@@ -666,6 +673,8 @@ export function __resetAiBreaker(): void {
   aiBreakerOpenUntil = 0;
 }
 
+export const FREE_RE = /(?<!\p{L})(?:gratis|free|kost(?:er)?\s+ingenting|uden\s+entré)(?!\p{L})/iu;
+const PRICE_Q_RE = /(?<!\p{L})(?:hvad\s+koster|pris(?:en)?|billet(?:ter|pris)?|how\s+much|price|cost)(?!\p{L})/iu;
 const FOLLOW_UP_RE = /^\s*(?:og|and|men|but)?\s*(?:hvad|what)\s+(?:så\s+)?(?:med|about)\b/iu;
 
 /**
@@ -677,14 +686,18 @@ const FOLLOW_UP_RE = /^\s*(?:og|and|men|but)?\s*(?:hvad|what)\s+(?:så\s+)?(?:me
 export function resolveTurnDiscovery(userTexts: string[], contextCity?: string, now: Date = new Date()): { seeking: boolean; followUp: boolean; intent: DiscoveryIntent } {
   const latest = userTexts[userTexts.length - 1] ?? "";
   const own = inferDiscoveryIntent(latest, contextCity, now);
+  if (FREE_RE.test(latest)) own.free = true;
   if (isDiscoverySeekingMessage(latest)) return { seeking: true, followUp: false, intent: own };
   const short = latest.trim().length <= 80;
-  const looksFollowUp = FOLLOW_UP_RE.test(latest) || (short && (own.dateWindow != null || own.city != null));
+  const looksFollowUp = FOLLOW_UP_RE.test(latest) || (short && (own.dateWindow != null || own.city != null || own.free === true || PRICE_Q_RE.test(latest)));
   if (looksFollowUp) {
     for (let i = userTexts.length - 2; i >= 0; i -= 1) {
       if (!isDiscoverySeekingMessage(userTexts[i])) continue;
       const prev = inferDiscoveryIntent(userTexts[i], contextCity, now);
-      const merged: DiscoveryIntent = { ...prev };
+      // Filters stick across follow-ups ("gratis i Odense" → "hvad med Aalborg?"
+      // is still free) unless the reader replaces them.
+      const earlierFree = userTexts.slice(i, -1).some(t => FREE_RE.test(t));
+      const merged: DiscoveryIntent = { ...prev, ...(earlierFree || own.free ? { free: true } : {}) };
       if (own.city) merged.city = own.city;
       if (own.dateWindow) merged.dateWindow = own.dateWindow;
       return { seeking: true, followUp: true, intent: merged };
@@ -698,4 +711,21 @@ export function looksLikeEventListing(reply: string): boolean {
   const lines = String(reply || "").split("\n").filter(l => /^\s*(?:[*•\-]|\d+\.)\s+\S/.test(l));
   const timed = lines.filter(l => /\b(?:kl\.?|klokken|at)\s*\d{1,2}(?:[:.]\d{2})?\b|\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b|\b\d{1,2}[:.]\d{2}\b/i.test(l));
   return timed.length >= 1;
+}
+
+/** A tool-less reply that states a price, a free claim or timed events is a fact without evidence. */
+export function looksLikeUngroundedFact(reply: string): boolean {
+  const text = String(reply || "");
+  if (looksLikeEventListing(text)) return true;
+  return /\b\d+(?:[.,]\d+)?\s*(?:kr\.?|dkk|eur|kroner)\b/i.test(text) || FREE_RE.test(text);
+}
+
+/** Honest clarifying question when we cannot ground an answer. */
+export function clarifyDiscoveryReply(lang: "da" | "en") {
+  return {
+    reply: lang === "en"
+      ? "Which city, and what kind of thing are you looking for? Then I'll find it in the catalogue."
+      : "Hvilken by, og hvad slags oplevelse leder du efter? Så finder jeg det i kataloget.",
+    tool_calls_made: [], place_ids: [], event_ids: [], suggested_tag_slugs: [],
+  };
 }

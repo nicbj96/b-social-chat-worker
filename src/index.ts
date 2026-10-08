@@ -48,7 +48,7 @@ import {
 } from "./chat-provider";
 import { rateLimitActorKey } from "./ratelimit";
 import { resolveChatTier } from "./plus-tier";
-import { resolveTurnDiscovery, looksLikeEventListing } from "./discovery-fallback";
+import { resolveTurnDiscovery, looksLikeEventListing, looksLikeUngroundedFact, clarifyDiscoveryReply } from "./discovery-fallback";
 import { aiBreakerIsOpen, searchEventsRelaxing, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 import type { DiscoveryIntent, Relaxation } from "./discovery-fallback";
 
@@ -1377,8 +1377,10 @@ async function synthesizeDiscoveryToolCalls(
   try {
     if (intent.kind === "events" || intent.kind === "both") {
       let used: Record<string, unknown> | null = null;
-      const res = await searchEventsRelaxing(intent, (filters) => { used = filters; return searchEvents(supabase, filters); });
-      if (!res.error && (res.results?.length ?? 0) > 0 && used) {
+      const res = await searchEventsRelaxing(intent, (filters) => { used = filters; return searchEvents(supabase, filters as any); });
+      // A relaxed hit (date/category dropped) goes to the honest fallback,
+      // which says what was loosened — the model would present it as a match.
+      if (!res.error && (res.relaxed?.length ?? 0) === 0 && (res.results?.length ?? 0) > 0 && used) {
         calls.push({ id: "call_auto_events", type: "function", function: { name: "search_events", arguments: JSON.stringify(used) } });
       }
     }
@@ -1838,6 +1840,13 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                 const namedCity = turnDiscovery(userMessages, ctx).intent.city;
                 if (namedCity) fnArgs.city = namedCity;
               }
+              // The reader's date window and free filter are facts about the
+              // question, not suggestions: the model's own dates never widen them.
+              if (fnArgs && fnName === "search_events") {
+                const ti = turnDiscovery(userMessages, ctx).intent;
+                if (ti.dateWindow) { fnArgs.date_from = ti.dateWindow.from; fnArgs.date_to = ti.dateWindow.to; delete fnArgs.timezone; }
+                if (ti.free) fnArgs.free = true;
+              }
 
               let result: any;
               if (!fnArgs) {
@@ -1940,6 +1949,17 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                             const res = await searchEventsRelaxing({ ...turnIntent, ...(fnArgs.city ? { city: fnArgs.city } : {}) }, (filters) => searchEvents(createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY), filters));
                             if (!res.error && !(res.relaxed || []).includes("category") && (res.results || []).length > 0) out.events = res.results;
                           }
+                        }
+                        if (turnIntent.free) {
+                          // Semantic rows carry no price: free questions are
+                          // answered only from price-verified catalogue rows.
+                          const fr = await searchEvents(createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY), {
+                            ...(fnArgs.city ? { city: fnArgs.city } : {}),
+                            ...(turnWindow ? { date_from: turnWindow.from, date_to: turnWindow.to } : {}),
+                            free: true,
+                          } as any);
+                          out.events = fr.error ? [] : (fr.results || []);
+                          if (fr.error) out.events_error = "rpc_failed";
                         }
                         out.events = out.events.slice(0, 8);
                         // A date-bounded question ("i weekenden", "tonight") rarely
@@ -2390,9 +2410,10 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
     }
     // No tool, not a discovery turn, yet the model lists timed events: those
     // came from nowhere. Answer honestly instead of passing invention through.
-    if (looksLikeEventListing(aiResponse.response || aiResponse.content || "")) {
+    if (looksLikeUngroundedFact(aiResponse.response || aiResponse.content || "")) {
       console.log(JSON.stringify({ event: "ungrounded_listing_blocked" }));
-      return catalogueFallbackForTurn(env, userMessages, ctx);
+      const lang = inferResponseLanguage(latest) === "en" ? "en" : "da";
+      return jsonResponse(clarifyDiscoveryReply(lang));
     }
 
     return jsonResponse({

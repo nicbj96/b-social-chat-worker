@@ -344,6 +344,7 @@ export type ToolCallArgs = {
     date_from?: string;
     date_to?: string;
     timezone?: string;
+    free?: boolean;
   };
   search_routes: {
     activity_type?: string;
