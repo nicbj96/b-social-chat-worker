@@ -294,3 +294,13 @@ describe("r24b", () => {
     expect(topicWordHit({ name: "Aarhus Zoologiske Have", tags: ["zoo"] }, "teater")).toBe(false);
   });
 });
+
+import { topicWordsOf } from "./discovery-fallback";
+describe("r24c", () => {
+  it("børneteater is a theatre topic", () => { expect(topicWordsOf("børneteater Aarhus")).toContain("teater"); });
+  it("meditation tag tried first", async () => {
+    const seen: any[] = [];
+    await searchEventsRelaxing({ kind: "events", city: "København", topicWords: ["meditation"], limit: 4 } as any, async (f) => { seen.push(f); return { results: f.tags === "meditation" ? [{ id: "m" }] : [] }; });
+    expect(seen[0].tags).toBe("meditation");
+  });
+});

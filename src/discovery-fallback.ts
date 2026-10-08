@@ -161,7 +161,9 @@ const CATEGORY_RULES = [
 const TOPIC_WORDS = ["yoga", "pilates", "dans", "salsa", "tango", "quiz", "standup", "stand-up", "comedy", "teater", "opera", "ballet", "foredrag", "workshop", "loppemarked", "marked", "brætspil", "gaming", "esport", "vinsmagning", "ølsmagning", "padel", "klatring", "løbetur", "maraton", "meditation", "poesi", "film", "biograf", "karaoke", "techno", "rock", "metal", "hiphop", "rap", "klassisk"];
 export function topicWordsOf(message: string): string[] {
   const low = String(message || "").toLowerCase();
-  return TOPIC_WORDS.filter(w => new RegExp(`(?<!\\p{L})${w}`, "u").test(low));
+  // "børneteater"/"dukketeater" are theatre: compound heads count for these.
+  const COMPOUND_OK = new Set(["teater", "foredrag", "workshop", "koncert"]);
+  return TOPIC_WORDS.filter(w => new RegExp(COMPOUND_OK.has(w) ? w : `(?<!\\p{L})${w}`, "u").test(low));
 }
 
 export function inferDiscoveryIntent(message: string, contextCity?: string, now: Date = new Date()): DiscoveryIntent {
@@ -355,6 +357,13 @@ export async function searchEventsRelaxing(
       relaxed: [],
     },
   ];
+  // R24-1: "meditation København" — a topic word is a real catalogue tag;
+  // try it before the broad category steps.
+  const tws = nonGenreTopics(intent.topicWords);
+  if (tws.length && !base.tags) {
+    const tagged = { ...base, category: undefined, tags: tws.join(",") };
+    steps.unshift(...(intent.dateWindow ? [{ filters: { ...tagged, date_from: intent.dateWindow.from, date_to: intent.dateWindow.to }, relaxed: [] as Relaxation[] }] : []), { filters: tagged, relaxed: intent.dateWindow ? ["date"] as Relaxation[] : [] });
+  }
   if (intent.dateWindow) steps.push({ filters: base, relaxed: ["date"] });
   if (hasCategory) {
     steps.push({ filters: { city: intent.city, ...(intent.free ? { free: true } : {}), ...(intent.country && !intent.city ? { country: intent.country } : {}) }, relaxed: intent.dateWindow ? ["date", "category"] : ["category"] });
