@@ -208,3 +208,10 @@ describe("r21b", () => {
     expect(r.reply).not.toMatch(/Her er nogle/);
   });
 });
+
+describe("r21c", () => {
+  it("genre prefix in Danish compounds", () => {
+    expect(rowIsGenre({ title: "BØLLE", description: "blander jazzmusikkens frihed" }, "jazz")).toBe(true);
+    expect(rowIsGenre({ title: "Popular science" }, "pop")).toBe(false);
+  });
+});
