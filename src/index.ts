@@ -3,6 +3,7 @@ import { normalizeToolCalls } from "./tool-calls";
 import { parseSearchIntent } from "./discovery-contract";
 import * as Sentry from "@sentry/cloudflare";
 import { cityToBBox } from "./city-bbox";
+import { narrowSemanticEvents } from "./semantic-narrow";
 import { SYSTEM_PROMPT } from "./system-prompt";
 import { promptVersion } from "./promptVersion";
 
@@ -1910,11 +1911,15 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                         const sbHeaders = { apikey: env.SUPABASE_KEY, Authorization: `Bearer ${env.SUPABASE_KEY}`, "Content-Type": "application/json" };
                         out.events = await rpcResultRows(`${env.SUPABASE_URL}/rest/v1/rpc/match_events`, sbHeaders, {
                           query_embedding: vec,
-                          match_count: 8,
+                          // Over-fetch, then narrow to what the reader asked:
+                          // the city (radius, not the loose box) and the date
+                          // window ("i weekenden") the embedding cannot express.
+                          match_count: 40,
                           match_threshold: 0.3,
                           filter_country: fnArgs.country ?? bbox?.country ?? null,
                           ...bboxParams,
                         }, () => { out.events_error = "rpc_failed"; });
+                        out.events = narrowSemanticEvents(out.events || [], bbox, inferDiscoveryIntent(latestUserMessage(userMessages)).dateWindow).slice(0, 8);
                         // M41 row cap: the model is never handed more than one
                         // page; a cap is flagged, not hidden.
                         out.events = capToolRows(out.events);
