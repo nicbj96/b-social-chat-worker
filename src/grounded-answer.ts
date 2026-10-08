@@ -138,8 +138,16 @@ function evidenceDayMonths(sources: GroundedSource[]): { day: number; month: num
   });
 }
 
-function sentenceViolates(sentence: string, sources: GroundedSource[], lang: "da" | "en"): string | null {
-  const titles = evidenceTitleList(sources);
+function sentenceViolates(sentence: string, allSources: GroundedSource[], lang: "da" | "en"): string | null {
+  const titles = evidenceTitleList(allSources);
+  // A fact next to a named event must match THAT event, not any row in the
+  // turn (another row's 16:00 must not validate "Lis Sørensen kl. 16.00").
+  const lowered = sentence.toLowerCase();
+  const named = allSources.filter(s => {
+    const t = String(s.verified_fields[s.kind === "event" ? "title" : "name"] ?? "").toLowerCase().trim();
+    return t.length >= 3 && lowered.includes(t);
+  });
+  const sources = named.length > 0 ? named : allSources;
   for (const m of sentence.matchAll(TITLE_RE)) {
     if (!titles.includes(m[1].toLowerCase())) return "invented_entity";
   }

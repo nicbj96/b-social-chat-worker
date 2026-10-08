@@ -3,7 +3,7 @@ import { normalizeToolCalls } from "./tool-calls";
 import { parseSearchIntent } from "./discovery-contract";
 import * as Sentry from "@sentry/cloudflare";
 import { cityToBBox } from "./city-bbox";
-import { narrowSemanticEvents } from "./semantic-narrow";
+import { narrowSemanticEvents, localizeSemanticRow, matchesTopic, idsByMention } from "./semantic-narrow";
 import { SYSTEM_PROMPT } from "./system-prompt";
 import { promptVersion } from "./promptVersion";
 
@@ -48,6 +48,7 @@ import {
 } from "./chat-provider";
 import { rateLimitActorKey } from "./ratelimit";
 import { resolveChatTier } from "./plus-tier";
+import { resolveTurnDiscovery, looksLikeEventListing } from "./discovery-fallback";
 import { aiBreakerIsOpen, searchEventsRelaxing, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 import type { DiscoveryIntent, Relaxation } from "./discovery-fallback";
 
@@ -1289,13 +1290,17 @@ async function tagTruncatedResponse(res: Response, truncated: boolean): Promise<
   }
 }
 
+function turnDiscovery(userMessages: ChatMessage[], context?: { user_prefs?: { city?: string } }) {
+  return resolveTurnDiscovery(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")), context?.user_prefs?.city);
+}
+
 async function directDiscoveryFallback(
   env: Env,
   userMessages: ChatMessage[],
   context: { user_prefs?: { city?: string } },
 ): Promise<Response> {
   const latestMessage = latestUserMessage(userMessages);
-  const intent = inferDiscoveryIntent(latestMessage, context.user_prefs?.city);
+  const intent = turnDiscovery(userMessages, context).intent;
   const language = inferResponseLanguage(latestMessage);
   const supabase = createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY);
   let places: any[] = [];
@@ -1364,9 +1369,9 @@ async function synthesizeDiscoveryToolCalls(
   userMessages: ChatMessage[],
   context: { user_prefs?: { city?: string } },
 ): Promise<{ id: string; type: "function"; function: { name: string; arguments: string } }[]> {
-  const latest = latestUserMessage(userMessages);
-  if (!isDiscoverySeekingMessage(latest)) return [];
-  const intent = inferDiscoveryIntent(latest, context.user_prefs?.city);
+  const turn = turnDiscovery(userMessages, context);
+  if (!turn.seeking) return [];
+  const intent = turn.intent;
   const supabase = createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY);
   const calls: { id: string; type: "function"; function: { name: string; arguments: string } }[] = [];
   try {
@@ -1410,7 +1415,7 @@ async function catalogueFallbackForTurn(
   const withDegradation = (payload: any): any =>
     degradationField ? { ...payload, degraded: true, degradation: degradationField } : payload;
   const latest = latestUserMessage(userMessages);
-  if (!isDiscoverySeekingMessage(latest)) {
+  if (!turnDiscovery(userMessages, context).seeking) {
     return jsonResponse(withDegradation(formatNonCatalogueReply(latest)), 200, extraHeaders);
   }
   const res = await directDiscoveryFallback(env, userMessages, context);
@@ -1830,7 +1835,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
               // without city → Zürich/Montreal rows). The reader named it, so the
               // worker fills it in from the latest user message before searching.
               if (fnArgs && !fnArgs.city && (fnName === "semantic_search" || fnName === "search_events" || fnName === "search_places")) {
-                const namedCity = inferDiscoveryIntent(latestUserMessage(userMessages)).city;
+                const namedCity = turnDiscovery(userMessages, ctx).intent.city;
                 if (namedCity) fnArgs.city = namedCity;
               }
 
@@ -1919,8 +1924,24 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                           filter_country: fnArgs.country ?? bbox?.country ?? null,
                           ...bboxParams,
                         }, () => { out.events_error = "rpc_failed"; });
-                        const turnWindow = inferDiscoveryIntent(latestUserMessage(userMessages)).dateWindow;
-                        out.events = narrowSemanticEvents(out.events || [], bbox, turnWindow, 25, fnArgs.city).slice(0, 8);
+                        const turnIntent = turnDiscovery(userMessages, ctx).intent;
+                        const turnWindow = turnIntent.dateWindow;
+                        out.events = narrowSemanticEvents(out.events || [], bbox, turnWindow, 25, fnArgs.city);
+                        // A named genre ("jazz") must be what we answer with:
+                        // keep rows that mention it, top up from the tag search.
+                        if (turnIntent.queryTag && !out.events_error) {
+                          // Only narrow when something actually matches; never
+                          // turn a usable semantic answer into an empty one.
+                          const onTopic = out.events.filter((e: any) => matchesTopic(e, turnIntent.queryTag!));
+                          if (onTopic.length > 0) out.events = onTopic;
+                          else {
+                            // Nothing semantic is actually on-genre: answer from the
+                            // tag search instead of calling rock/electronica "jazz".
+                            const res = await searchEventsRelaxing({ ...turnIntent, ...(fnArgs.city ? { city: fnArgs.city } : {}) }, (filters) => searchEvents(createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY), filters));
+                            if (!res.error && !(res.relaxed || []).includes("category") && (res.results || []).length > 0) out.events = res.results;
+                          }
+                        }
+                        out.events = out.events.slice(0, 8);
                         // A date-bounded question ("i weekenden", "tonight") rarely
                         // has its events in the semantic top-N. Top up from the
                         // deterministic city+date search so the window is answered
@@ -1934,7 +1955,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                         }
                         // M41 row cap: the model is never handed more than one
                         // page; a cap is flagged, not hidden.
-                        out.events = capToolRows(out.events);
+                        out.events = capToolRows(out.events).map((e: any) => localizeSemanticRow(e));
                         if (rowCapFlag.hit) out.rows_capped = RESOURCE_CAPS.rows;
                       }
                       (out.events || []).forEach((e: any) => {
@@ -2347,8 +2368,9 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
               corrections: grounded.corrections,
               intent_proposal: turnIntentProposal,
               tool_calls_made: aiResponse.tool_calls.map((tc: any) => tc.function.name),
-              place_ids: collectedPlaceIds,
-              event_ids: collectedEventIds,
+              // Cards follow the prose: the rows the reply names, first.
+              place_ids: idsByMention(collectedPlaces.length ? collectedPlaces : collectedPlaceIds.map((id) => ({ id })), grounded.reply),
+              event_ids: idsByMention(collectedEvents.length ? collectedEvents : collectedEventIds.map((id) => ({ id })), grounded.reply),
               suggested_tag_slugs: [...new Set(collectedTagSlugs)],
               partial: deadlineHitMidTools || undefined,
               ...(rowsCapped ? { rows_capped: RESOURCE_CAPS.rows } : {}),
@@ -2361,10 +2383,16 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
     // No tool calls — never invent discovery results. Fall back to direct DB search.
     const latest = latestUserMessage(userMessages);
     if (
-      isDiscoverySeekingMessage(latest) ||
+      turnDiscovery(userMessages, ctx).seeking ||
       looksUngroundedDiscoveryReply(aiResponse.response || aiResponse.content || "")
     ) {
       return await directDiscoveryFallback(env, userMessages, ctx);
+    }
+    // No tool, not a discovery turn, yet the model lists timed events: those
+    // came from nowhere. Answer honestly instead of passing invention through.
+    if (looksLikeEventListing(aiResponse.response || aiResponse.content || "")) {
+      console.log(JSON.stringify({ event: "ungrounded_listing_blocked" }));
+      return catalogueFallbackForTurn(env, userMessages, ctx);
     }
 
     return jsonResponse({
