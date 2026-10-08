@@ -102,3 +102,22 @@ describe("r17", () => {
     expect(r.reply).not.toMatch(/Let me try/i);
   });
 });
+
+describe("r18", () => {
+  const n = new Date("2026-10-08T10:00:00Z");
+  it("M-1: 'kun musik' keeps city, weekend and free from the chain", () => {
+    const t = resolveTurnDiscovery(["gratis koncerter i København i weekenden", "hvad med Aarhus?", "kun musik"], undefined, n);
+    expect(t.seeking).toBe(true);
+    expect(t.intent.city).toBe("Aarhus");
+    expect(t.intent.free).toBe(true);
+    expect(t.intent.dateWindow?.label).toBe("i weekenden");
+    expect(t.intent.eventCategory).toBe("musik");
+  });
+  it("M-2: English reference follow-ups keep context", () => {
+    for (const q of ["which one is cheapest?", "tell me more about the first one"]) {
+      const t = resolveTurnDiscovery(["something for kids in Aarhus this weekend", q], undefined, n);
+      expect(t.seeking).toBe(true);
+      expect(t.intent.city).toBe("Aarhus");
+    }
+  });
+});

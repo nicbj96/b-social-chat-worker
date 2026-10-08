@@ -676,7 +676,9 @@ export function __resetAiBreaker(): void {
 }
 
 export const FREE_RE = /(?<!\p{L})(?:gratis|free|kost(?:er)?\s+ingenting|uden\s+entré)(?!\p{L})/iu;
-const PRICE_Q_RE = /(?<!\p{L})(?:hvad\s+koster|pris(?:en)?|billet(?:ter|pris)?|how\s+much|price|cost)(?!\p{L})/iu;
+const PRICE_Q_RE = /(?<!\p{L})(?:cheapest|billigste|dyreste|hvad\s+koster|pris(?:en)?|billet(?:ter|pris)?|how\s+much|price|cost)(?!\p{L})/iu;
+// References to the previous answer ("the first one", "den første", "which one").
+const REFER_RE = /(?<!\p{L})(?:(?:the\s+)?(?:first|second|third|last)\s+one|den\s+(?:første|anden|tredje|sidste)|which\s+one|hvilken\s+af\s+dem|more\s+about|mere\s+om|tell\s+me\s+more|fortæl\s+mere)(?!\p{L})/iu;
 const FOLLOW_UP_RE = /^\s*(?:og|and|men|but)?\s*(?:hvad|what)\s+(?:så\s+)?(?:med|about)\b/iu;
 
 /**
@@ -691,7 +693,7 @@ export function resolveTurnDiscovery(userTexts: string[], contextCity?: string, 
   if (FREE_RE.test(latest)) own.free = true;
   if (isDiscoverySeekingMessage(latest)) return { seeking: true, followUp: false, intent: own };
   const short = latest.trim().length <= 80;
-  const looksFollowUp = FOLLOW_UP_RE.test(latest) || (short && (own.dateWindow != null || own.city != null || own.free === true || PRICE_Q_RE.test(latest)));
+  const looksFollowUp = FOLLOW_UP_RE.test(latest) || (short && (own.dateWindow != null || own.city != null || own.free === true || own.eventCategory != null || PRICE_Q_RE.test(latest) || REFER_RE.test(latest)));
   if (looksFollowUp) {
     for (let i = userTexts.length - 2; i >= 0; i -= 1) {
       if (!isDiscoverySeekingMessage(userTexts[i])) continue;
@@ -709,6 +711,8 @@ export function resolveTurnDiscovery(userTexts: string[], contextCity?: string, 
       }
       if (own.city) merged.city = own.city;
       if (own.dateWindow) merged.dateWindow = own.dateWindow;
+      // "kun musik" narrows the category but keeps city/date/free.
+      if (own.eventCategory) { merged.eventCategory = own.eventCategory; merged.queryTag = own.queryTag; merged.kind = own.kind === "places" ? merged.kind : "events"; }
       return { seeking: true, followUp: true, intent: merged };
     }
   }
