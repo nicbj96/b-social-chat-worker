@@ -140,3 +140,14 @@ describe("r19", () => {
     expect(r.reply).not.toMatch(/• Lørdagsrytmik/);
   });
 });
+
+import { isDiscoverySeekingMessage } from "./discovery-fallback";
+describe("r19b", () => {
+  const n = new Date("2026-10-08T10:00:00Z");
+  it("R19-2: 'og søndag?' after a city-less kids question is Sunday", () => {
+    expect(isDiscoverySeekingMessage("børnearrangementer lørdag")).toBe(true);
+    const t = resolveTurnDiscovery(["børnearrangementer lørdag", "og søndag?"], undefined, n);
+    expect(t.seeking).toBe(true);
+    expect(t.intent.dateWindow?.label).toMatch(/søndag/);
+  });
+});

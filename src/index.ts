@@ -1932,7 +1932,9 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                           // window ("i weekenden") the embedding cannot express.
                           match_count: 40,
                           match_threshold: 0.3,
-                          filter_country: fnArgs.country ?? bbox?.country ?? null,
+                          // A Danish question with no city means Denmark, never Lachine,
+                          // Québec. English/explicit-country questions stay worldwide.
+                          filter_country: fnArgs.country ?? bbox?.country ?? (inferResponseLanguage(latestUserMessage(userMessages)) === "en" ? null : "DK"),
                           ...bboxParams,
                         }, () => { out.events_error = "rpc_failed"; });
                         const turnIntent = turnDiscovery(userMessages, ctx).intent;
