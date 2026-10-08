@@ -48,7 +48,7 @@ import {
 } from "./chat-provider";
 import { rateLimitActorKey } from "./ratelimit";
 import { resolveChatTier } from "./plus-tier";
-import { chainGenre, rowIsGenre, topicWordHit, nonGenreTopics, GENRES } from "./discovery-fallback";
+import { chainGenre, rowIsGenre, topicWordHit, nonGenreTopics, GENRES, honestEmptyReply } from "./discovery-fallback";
 import { resolveTurnDiscovery, looksLikeEventListing, looksLikeUngroundedFact, clarifyDiscoveryReply } from "./discovery-fallback";
 import { aiBreakerIsOpen, searchEventsRelaxing, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 import type { DiscoveryIntent, Relaxation } from "./discovery-fallback";
@@ -2452,6 +2452,13 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
           replyLang,
         );
         grounded = groundModelReply(repaired, groundedSources, { lang: replyLang, retrievalError: namedError ?? null });
+      }
+
+      // R24: an empty discovery answer is written from the resolved intent,
+      // never from the model ("ingen events lørdag" when the window is fredag).
+      if (groundedSources.length === 0 && !namedError && !deadlineHitMidTools) {
+        const td = turnDiscovery(userMessages, ctx);
+        if (td.seeking) grounded = { ...grounded, reply: honestEmptyReply(td.intent, chainGenre(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? ""))), replyLang === "en" ? "en" : "da"), grounding: "verified" } as any;
       }
 
       // M41 resource cap: the response payload is byte-capped, and any cut is
