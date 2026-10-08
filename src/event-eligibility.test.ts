@@ -174,10 +174,15 @@ describe("search_events eligibility before the server cap", () => {
     ];
     const { body, queries } = await chatEvents(rows);
     expect(body.event_ids).toEqual(["active", "legacy-null-status"]);
-    expect(queries).toHaveLength(1);
-    expect(queries[0].searchParams.get("limit")).toBe("8");
-    expect(queries[0].searchParams.get("order")).toBe("date.asc,id.asc");
-    expect(queries[0].searchParams.getAll("or").join(" ")).toContain("status.eq.active,status.is.null");
+    // A Danish question without a city tries Denmark first (country=eq.DK),
+    // then the worldwide catalogue: at most two server-capped queries, never
+    // a client-side over-fetch.
+    expect(queries.length).toBeLessThanOrEqual(2);
+    for (const q of queries) {
+      expect(q.searchParams.get("limit")).toBe("8");
+      expect(q.searchParams.get("order")).toBe("date.asc,id.asc");
+      expect(q.searchParams.getAll("or").join(" ")).toContain("status.eq.active,status.is.null");
+    }
   });
 
   it("includes known ongoing events but never assumes a past unknown-end event is still running", async () => {
