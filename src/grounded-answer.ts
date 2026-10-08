@@ -74,10 +74,9 @@ export function renderGroundedFacts(sources: GroundedSource[], lang: "da" | "en"
     const d = s.verified_fields.date;
     const timeLine = typeof d === "string" && Number.isFinite(Date.parse(d))
       ? (() => {
-          const dt = new Date(d);
-          const hh = String(dt.getUTCHours()).padStart(2, "0"), mm = String(dt.getUTCMinutes()).padStart(2, "0");
-          const stamp = `${dt.toISOString().slice(0, 10)} ${hh}:${mm}`;
-          return lang === "da" ? `Tidspunkt: ${stamp} UTC` : `Time: ${stamp} UTC`;
+          // R24: readers get Copenhagen local time, never raw UTC.
+          const stamp = new Intl.DateTimeFormat(lang === "da" ? "da-DK" : "en-GB", { timeZone: "Europe/Copenhagen", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(d));
+          return lang === "da" ? `Tidspunkt: ${stamp}` : `Time: ${stamp}`;
         })()
       : null;
     return timeLine ? `${label}\n${timeLine}` : label;

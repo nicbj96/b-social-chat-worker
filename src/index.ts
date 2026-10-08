@@ -2038,6 +2038,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                         ? await searchPlacesForQuery(env, placeQuery, 8, fnArgs.city)
                         : { results: [], skipped: "no_query_or_city" };
                       out.places = capToolRows(placeOutcome.results);
+                      { const tws = nonGenreTopics(turnDiscovery(userMessages, ctx).intent.topicWords); if (tws.length) out.places = out.places.filter((p: any) => tws.some((w) => topicWordHit(p, w))); }
                       // H1/M3 — the model is told WHY the place half is empty
                       // ("no_place_intent", "no_city_or_category") or that it
                       // FAILED, so it cannot narrate a top-8 it never received.
@@ -2072,6 +2073,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                       // A named genre is the subject: nothing in that genre is an
                       // honest empty answer, not STEP & AMBIENT called "jazz".
                       const g = chainGenre(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")));
+                      { const tws = nonGenreTopics(turnDiscovery(userMessages, ctx).intent.topicWords); if (tws.length) result.results = result.results.filter((e: any) => tws.some((w) => topicWordHit(e, w))); }
                       if (g) {
                         result.results = result.results.filter((e: any) => rowIsGenre(e, g));
                         // The first 8 music rows by date may hold no jazz at all:
@@ -2113,6 +2115,8 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                   result = await searchPlaces(supabase, fnArgs);
                   if (result.results) {
                     result.results = capToolRows(result.results);
+                    // R23-4: "børneteater" places must be theatres, not a zoo.
+                    { const tws = nonGenreTopics(turnDiscovery(userMessages, ctx).intent.topicWords); if (tws.length) result.results = result.results.filter((p: any) => tws.some((w) => topicWordHit(p, w))); }
                     result.results.forEach((p: any) => {
                       if (!p?.id) return;
                       collectedPlaceIds.push(p.id);

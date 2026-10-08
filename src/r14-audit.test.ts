@@ -282,3 +282,15 @@ describe("r24", () => {
     expect(honestEmptyReply(t.intent, null, "da")).toContain("stand-up-events i Aarhus lørdag den 10. oktober");
   });
 });
+
+import { looksUngroundedDiscoveryReply } from "./discovery-fallback";
+describe("r24b", () => {
+  it("foreign links are ungrounded", () => {
+    expect(looksUngroundedDiscoveryReply("- [Meditation](https://www.bsocial.dk/search/events?category=meditation)")).toBe(true);
+    expect(looksUngroundedDiscoveryReply("Se https://b-social.net/soeg")).toBe(false);
+  });
+  it("place topic hit uses name/tags", () => {
+    expect(topicWordHit({ name: "Aarhus Teater", tags: ["kultur"] }, "teater")).toBe(true);
+    expect(topicWordHit({ name: "Aarhus Zoologiske Have", tags: ["zoo"] }, "teater")).toBe(false);
+  });
+});
