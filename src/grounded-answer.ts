@@ -229,6 +229,9 @@ export function groundModelReply(
   // Internal tool-loop narration is not an answer to the reader.
   modelText = modelText.replace(/(?<=[.!?])[ \t]+(?:let me (?:try (?:to )?)?(?:search(?:ing)?|look(?:ing)?)|lad mig (?:prøve at )?(?:søge|kigge))[^.!?\n]*[.!?]?/gi, "");
   modelText = modelText.replace(/^[ \t]*(?:let me (?:try (?:to )?)?(?:search(?:ing)?|look(?:ing)?)[^\n]*|lad mig (?:prøve at )?(?:søge|kigge)[^\n]*|jeg (?:prøver|søger) (?:igen|lige)[^\n]*)\n?/gim, "");
+  // Template placeholders ("[jazz_steder København]") and empty checkboxes are
+  // model scaffolding, never reader text.
+  modelText = modelText.replace(/\[[\p{L}_]+(?:\s+[\p{L}]+)*_[\p{L}_]*(?:\s+[\p{L}]+)*\]/gu, "").replace(/^\s*[-*]\s*\[\s?\]\s*/gmu, "- ");
   if (!modelText.trim()) {
     return { reply: sources.length ? renderGroundedFacts(sources, da ? "da" : "en").join("\n") : "", grounding: sources.length ? "verified" : "flagged", corrections: [] };
   }

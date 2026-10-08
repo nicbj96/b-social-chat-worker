@@ -178,3 +178,24 @@ describe("r20", () => {
     expect(t.intent.free).toBe(true);
   });
 });
+
+import { namedGenre, rowIsGenre, inferDiscoveryIntent } from "./discovery-fallback";
+describe("r21", () => {
+  const n = new Date("2026-10-08T10:00:00Z");
+  it("R21-2: English kids Sunday is a dated kids discovery turn", () => {
+    expect(isDiscoverySeekingMessage("kids activities Aarhus Sunday")).toBe(true);
+    const i = inferDiscoveryIntent("kids activities Aarhus Sunday", undefined, n);
+    expect(i.city).toBe("Aarhus");
+    expect(i.dateWindow?.label).toBe("søndag");
+    expect(i.eventCategory).toBe("familie");
+  });
+  it("R21-3: genre gate", () => {
+    expect(namedGenre("elektronisk musik København")).toBe("elektronisk");
+    expect(rowIsGenre({ title: "Sonic Ritual", description: "stoner doom" }, "elektronisk")).toBe(false);
+    expect(rowIsGenre({ title: "Techno night", description: "" }, "elektronisk")).toBe(true);
+    expect(rowIsGenre({ title: "Hip-hop jam" }, "hiphop")).toBe(true);
+  });
+  it("R21-1: placeholder removed", () => {
+    expect(groundModelReply("Ingen jazz-events. [jazz_steder København]", [], { lang: "da" }).reply).not.toContain("[");
+  });
+});

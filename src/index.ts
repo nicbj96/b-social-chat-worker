@@ -48,6 +48,7 @@ import {
 } from "./chat-provider";
 import { rateLimitActorKey } from "./ratelimit";
 import { resolveChatTier } from "./plus-tier";
+import { chainGenre, rowIsGenre } from "./discovery-fallback";
 import { resolveTurnDiscovery, looksLikeEventListing, looksLikeUngroundedFact, clarifyDiscoveryReply } from "./discovery-fallback";
 import { aiBreakerIsOpen, searchEventsRelaxing, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 import type { DiscoveryIntent, Relaxation } from "./discovery-fallback";
@@ -1982,6 +1983,10 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                         }
                         // Final topic gate: date/free top-ups must not reintroduce off-topic rows.
                         if (turnIntent.queryTag && turnIntent.queryTag !== "musik") out.events = (out.events || []).filter((e: any) => matchesTopic(e, turnIntent.queryTag!) || (turnIntent.queryTag === turnIntent.eventCategory && turnIntent.eventCategory && String(e.category || "").includes(turnIntent.eventCategory === "familie" ? "børn" : turnIntent.eventCategory)));
+                        {
+                          const g = chainGenre(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")));
+                          if (g) out.events = (out.events || []).filter((e: any) => rowIsGenre(e, g));
+                        }
                         out.events = out.events.slice(0, 8);
                         // A date-bounded question ("i weekenden", "tonight") rarely
                         // has its events in the semantic top-N. Top up from the
@@ -2050,11 +2055,10 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                     result.results = capToolRows(result.results);
                     // A named genre ("jazz") is the answer's subject: drop nu-metal etc.
                     {
-                      const tq = turnDiscovery(userMessages, ctx).intent.queryTag;
-                      if (tq === "jazz") {
-                        // Nothing jazz is an honest empty answer, not STEP & AMBIENT.
-                        result.results = result.results.filter((e: any) => matchesTopic(e, "jazz"));
-                      }
+                      // A named genre is the subject: nothing in that genre is an
+                      // honest empty answer, not STEP & AMBIENT called "jazz".
+                      const g = chainGenre(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")));
+                      if (g) result.results = result.results.filter((e: any) => rowIsGenre(e, g));
                     }
                     result.results.forEach((e: any) => {
                       if (!e?.id) return;
