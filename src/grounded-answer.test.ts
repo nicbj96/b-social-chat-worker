@@ -155,3 +155,11 @@ describe("grounding against search_events display rows", () => {
     expect(sources[0].verified_fields.price).toBeUndefined();
   });
 });
+
+describe("clock claims use Danish wall time only", () => {
+  const s = buildGroundedSources([{ kind: "event", retrieved_at: "2026-10-08T00:00:00Z", rows: [{ id: "55555555-5555-4555-8555-555555555555", title: "DANS", date_raw: "2026-10-25T14:00:00+00:00", date: "x" }] }]);
+  it("rejects the UTC clock and accepts the local one", () => {
+    expect(groundModelReply("DANS den 25. oktober kl. 14.00.", s, { lang: "da" }).grounding).toBe("corrected");
+    expect(groundModelReply("DANS den 25. oktober kl. 15.00.", s, { lang: "da" }).grounding).toBe("verified");
+  });
+});

@@ -120,9 +120,10 @@ function evidenceClockMinutes(sources: GroundedSource[]): number[] {
   return sources.flatMap(s => {
     const d = s.verified_fields.date;
     if (typeof d !== "string" || !Number.isFinite(Date.parse(d))) return [];
-    const dt = new Date(d);
+    // Readers are told Danish wall time; a UTC clock ("kl. 14.00" for a
+    // 15:00 start) is a wrong fact, so only the local time is evidence.
     const local = cphParts(d);
-    return [dt.getUTCHours() * 60 + dt.getUTCMinutes(), ...(local ? [local.minutes] : [])];
+    return local ? [local.minutes] : [];
   });
 }
 
