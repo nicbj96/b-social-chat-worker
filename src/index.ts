@@ -48,7 +48,7 @@ import {
 } from "./chat-provider";
 import { rateLimitActorKey } from "./ratelimit";
 import { resolveChatTier } from "./plus-tier";
-import { chainGenre, rowIsGenre, topicWordHit, nonGenreTopics, GENRES, honestEmptyReply } from "./discovery-fallback";
+import { chainGenre, rowIsGenre, topicWordHit, nonGenreTopics, GENRES, honestEmptyReply, topicTagList } from "./discovery-fallback";
 import { resolveTurnDiscovery, looksLikeEventListing, looksLikeUngroundedFact, clarifyDiscoveryReply } from "./discovery-fallback";
 import { aiBreakerIsOpen, searchEventsRelaxing, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 import type { DiscoveryIntent, Relaxation } from "./discovery-fallback";
@@ -1336,6 +1336,19 @@ async function directDiscoveryFallback(
     events = result.results || [];
   }
 
+  // "techno" → "og i Aarhus?": the genre still rules; no shelters or comedy.
+  const fbGenre = chainGenre(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")));
+  if (fbGenre && !failed && userMessages.filter((m) => m.role === "user").length > 1) {
+    places = [];
+    events = events.filter((e: any) => rowIsGenre(e, fbGenre));
+    if (events.length === 0) {
+      const again = await searchEvents(supabase, { city: intent.city, tags: Array.from(new Set([fbGenre, ...(GENRES[fbGenre] ?? [])])).join(","), ...(intent.dateWindow ? { date_from: intent.dateWindow.from, date_to: intent.dateWindow.to } : {}), ...(intent.free ? { free: true } : {}) } as any);
+      events = ((again.results || []) as any[]).filter((e: any) => rowIsGenre(e, fbGenre));
+    }
+    if (events.length === 0) {
+      return jsonResponse({ reply: honestEmptyReply(intent, fbGenre, language === "en" ? "en" : "da"), tool_calls_made: ["direct_discovery_fallback"], place_ids: [], event_ids: [], suggested_tag_slugs: [] });
+    }
+  }
   if (failed && places.length === 0 && events.length === 0) {
     return jsonResponse({
       reply: language === "en"
@@ -2003,6 +2016,9 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                             ...(fnArgs.city ? { city: fnArgs.city } : {}), date_from: turnWindow.from, date_to: turnWindow.to,
                             // The top-up obeys the same free filter as the answer.
                             ...(turnIntent.free ? { free: true } : {}),
+                            // "comedy København lørdag": ask for the topic's tags, not
+                            // the first 8 rows of a busy Saturday.
+                            ...(nonGenreTopics(turnIntent.topicWords).length ? { tags: topicTagList(nonGenreTopics(turnIntent.topicWords)).join(",") } : {}),
                           } as any);
                           const seen = new Set(out.events.map((e: any) => e?.id));
                           // R22: the top-up obeys the same topic + genre gate as the
@@ -2073,7 +2089,13 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                       // A named genre is the subject: nothing in that genre is an
                       // honest empty answer, not STEP & AMBIENT called "jazz".
                       const g = chainGenre(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")));
-                      { const tws = nonGenreTopics(turnDiscovery(userMessages, ctx).intent.topicWords); if (tws.length) result.results = result.results.filter((e: any) => tws.some((w) => topicWordHit(e, w))); }
+                      { const tws = nonGenreTopics(turnDiscovery(userMessages, ctx).intent.topicWords); if (tws.length) {
+                        result.results = result.results.filter((e: any) => tws.some((w) => topicWordHit(e, w)));
+                        if (result.results.length === 0 && !fnArgs.tags) {
+                          const again = await searchEvents(supabase, { ...fnArgs, category: undefined, tags: topicTagList(tws).join(",") } as any);
+                          result.results = capToolRows(((again.results || []) as any[]).filter((e: any) => tws.some((w) => topicWordHit(e, w))));
+                        }
+                      } }
                       if (g) {
                         result.results = result.results.filter((e: any) => rowIsGenre(e, g));
                         // The first 8 music rows by date may hold no jazz at all:
@@ -2460,7 +2482,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
 
       // R24: an empty discovery answer is written from the resolved intent,
       // never from the model ("ingen events lørdag" when the window is fredag).
-      if (groundedSources.length === 0 && !namedError && !deadlineHitMidTools) {
+      if (groundedSources.length === 0 && collectedEventIds.length === 0 && collectedPlaceIds.length === 0 && !namedError && !deadlineHitMidTools) {
         const td = turnDiscovery(userMessages, ctx);
         // A retrieval that returned nothing cannot back a bulleted list either
         // ("legepladser i Odense" → three invented playgrounds).

@@ -13,6 +13,8 @@ export type DiscoveryIntent = {
   dateWindow?: DateWindow;
   /** Country restriction (a Danish question without a city means DK). */
   country?: string;
+  /** The reader asked what it costs. */
+  priceAsked?: boolean;
   /** Specific topic words without a category mapping ("yoga"). */
   topicWords?: string[];
   /** Reader asked for free things only ("gratis", "free"). */
@@ -165,6 +167,7 @@ export function topicWordsOf(message: string): string[] {
   const COMPOUND_OK = new Set(["teater", "foredrag", "workshop", "koncert"]);
   const hits = TOPIC_WORDS.filter(w => new RegExp(COMPOUND_OK.has(w) ? w : `(?<!\\p{L})${w}`, "u").test(low));
   // "børneteater" is narrower than "teater": comedy clubs tagged teater are not it.
+  if (/(?<!\p{L})markede?r?(?!\p{L})/u.test(low) && !hits.includes("marked")) hits.push("marked");
   return /b[øo]rne(?:teater|forestilling)/u.test(low) ? ["børneteater", ...hits.filter(w => w !== "teater")] : hits;
 }
 
@@ -316,7 +319,9 @@ export function isDiscoverySeekingMessage(message: string): boolean {
   const text = String(message || "").trim();
   if (!text) return false;
   const hasVerb = /\b(find|vis|søg|anbefal|show|recommend|search|looking for|hvad sker|hvad kan|er der)\b/iu.test(text);
-  const hasNoun = /\b(event|events|activit|arrangement|sted|steder|koncert|festival|jazz|aktivitet|aktiviteter|museum|restaurant|café|cafe|park|skov|turnering)\w*\b/iu.test(text);
+  const hasNoun = /\b(event|events|activit|arrangement|sted|steder|koncert|festival|jazz|aktivitet|aktiviteter|museum|museer|restaurant|café|cafe|caféer|bar|barer|pub|værtshus|natteliv|park|skov|turnering)\w*\b/iu.test(text);
+  // A bare genre ("techno") is a catalogue question; follow-ups inherit it.
+  if (/^\s*(?:techno|jazz|house|rock|metal|hiphop|hip-hop|rap|elektronisk(?:\s+musik)?|klassisk(?:\s+musik)?)\s*[?!.]*\s*$/iu.test(text)) return true;
   const hasCity = /\b(kbh|cph|københavn|copenhagen|aarhus|århus|aalborg|ålborg|odense|roskilde|esbjerg|vejle|kolding|horsens|randers|malmö|malmo|frederikshavn|skagen|thisted)\b/iu.test(text);
   // "noget for børn på søndag i Aarhus" has no verb and no noun from the list
   // above, only a city, a category word and a date. That is still a discovery
@@ -363,7 +368,7 @@ export async function searchEventsRelaxing(
   // try it before the broad category steps.
   const tws = nonGenreTopics(intent.topicWords);
   if (tws.length && !base.tags) {
-    const tagged = { ...base, category: undefined, tags: tws.join(",") };
+    const tagged = { ...base, category: undefined, tags: topicTagList(tws).join(",") };
     steps.unshift(...(intent.dateWindow ? [{ filters: { ...tagged, date_from: intent.dateWindow.from, date_to: intent.dateWindow.to }, relaxed: [] as Relaxation[] }] : []), { filters: tagged, relaxed: intent.dateWindow ? ["date"] as Relaxation[] : [] });
   }
   if (intent.dateWindow) steps.push({ filters: base, relaxed: ["date"] });
@@ -570,7 +575,7 @@ export function formatFallbackReply(
           : copy.cityMissing;
       return `• ${place.name} — ${where}`;
     }),
-    ...selectedEvents.map((event) => `• ${event.title} — ${(event.location && !/^(none|null|undefined)$/i.test(String(event.location).trim()) ? event.location : "") || copy.locationMissing}${event.date ? ` (${event.date})` : ""}${intent.free ? (language === "en" ? " — Free" : " — Gratis") : ""}`),
+    ...selectedEvents.map((event) => `• ${event.title} — ${(event.location && !/^(none|null|undefined)$/i.test(String(event.location).trim()) ? event.location : "") || copy.locationMissing}${event.date ? ` (${event.date})` : ""}${intent.free ? (language === "en" ? " — Free" : " — Gratis") : intent.priceAsked && (event as any).price ? ` — ${(event as any).price}` : ""}`),
   ].slice(0, intent.limit);
 
   // R24: a named topic ("legepladser", "meditation") that no row matches is
@@ -592,10 +597,10 @@ export function formatFallbackReply(
   // A topic word we have no category for ("yoga") that no row mentions: say
   // so instead of presenting comedy as the answer.
   const missing = selectedEvents.length > 0 && intent.topicWords?.length
-    && !selectedEvents.some((e: any) => intent.topicWords!.some(w => `${e.title ?? ""} ${e.description ?? ""} ${(e.interest_tags ?? []).join(" ")}`.toLowerCase().includes(w)))
+    && !selectedEvents.some((e: any) => intent.topicWords!.some(w => topicWordHit(e, w)))
     ? intent.topicWords.join(" ") : "";
   const missingIntro = missing
-    ? (language === "en" ? `I found nothing matching "${missing}". Other events${intent.city ? ` in ${intent.city}` : ""}${intent.dateWindow ? ` (${intent.dateWindow.label})` : ""}:` : `Jeg fandt ikke noget med "${missing}". Andre events${intent.city ? ` i ${intent.city}` : ""}${intent.dateWindow ? ` (${intent.dateWindow.label})` : ""}:`)
+    ? (language === "en" ? `I found nothing matching "${missing}". Other events${intent.city ? ` in ${intent.city}` : ""}${intent.dateWindow && !relaxed.includes("date") ? ` (${intent.dateWindow.label})` : ""}:` : `Jeg fandt ikke noget med "${missing}". Andre events${intent.city ? ` i ${intent.city}` : ""}${intent.dateWindow && !relaxed.includes("date") ? ` (${intent.dateWindow.label})` : ""}:`)
     : "";
   return {
     reply: lines.length > 0
@@ -775,6 +780,7 @@ export function resolveTurnDiscovery(userTexts: string[], contextCity?: string, 
       }
       // "kun musik" narrows the category but keeps city/date/free.
       if (own.eventCategory) { merged.eventCategory = own.eventCategory; merged.queryTag = own.queryTag; merged.kind = own.kind === "places" ? merged.kind : "events"; }
+      if (PRICE_Q_RE.test(latest)) merged.priceAsked = true;
       return { seeking: true, followUp: true, intent: merged };
     }
   }
@@ -844,13 +850,22 @@ const TOPIC_SYNONYMS: Record<string, string[]> = {
   comedy: ["stand-up", "standup", "comedy", "komik"],
   teater: ["teater", "theatre", "theater", "forestilling"],
   legeplads: ["legeplads", "playground", "legepark"],
+  museum: ["museum", "museer", "museet", "museums"],
+  dans: ["dans", "danse", "dansen", "danser", "dance", "folkedans", "familiedans", "salsa", "tango", "swing", "ballet"],
+  film: ["film", "filmaften", "biograf", "cinema", "kino"],
+  marked: ["marked", "markedet", "loppemarked", "julemarked", "market"],
   "børneteater": ["børneteater", "dukketeater", "børneforestilling", "familieforestilling", "teater for børn", "forestilling for børn"],
 };
 /** A row mentions the topic word (or a close synonym). */
 export function topicWordHit(row: Record<string, any>, word: string): boolean {
   const tg = (v: any) => Array.isArray(v) ? v.join(" ") : String(v ?? "");
   const hay = `${row.title ?? ""} ${row.name ?? ""} ${row.description ?? ""} ${tg(row.interest_tags)} ${tg(row.tags)} ${tg(row.main_categories)} ${tg(row.subcategory)}`.toLowerCase();
-  return (TOPIC_SYNONYMS[word] ?? [word]).some((w) => hay.includes(w));
+  // Short words need whole-word hits: "dans" must not match "dansk".
+  return (TOPIC_SYNONYMS[word] ?? [word]).some((w) => w.length >= 6 ? hay.includes(w) : new RegExp(`(?<!\\p{L})${w}(?!\\p{L})`, "u").test(hay));
+}
+/** Catalogue tags to try for named topics (synonyms included). */
+export function topicTagList(words: string[]): string[] {
+  return Array.from(new Set(words.flatMap((w) => TOPIC_SYNONYMS[w] ?? [w]))).filter((t) => !/\s/.test(t));
 }
 
 /** Topic words minus music genres (the genre gate owns those). */
@@ -863,10 +878,13 @@ export function nonGenreTopics(words?: string[]): string[] {
 export function honestEmptyReply(intent: DiscoveryIntent, genre: string | null, lang: "da" | "en"): string {
   const da = lang !== "en";
   const topics = nonGenreTopics(intent.topicWords);
-  const what = genre
+  const human = (t: string) => t.replace(/[_-]+/g, " ").replace(/^mad drikke$/, "mad og drikke");
+  const what = intent.kind === "places" && !genre
+    ? (topics.length ? (da ? `steder med ${topics[0]}` : `${topics[0]} places`) : intent.queryTag ? (da ? `steder med ${human(intent.queryTag)}` : `${human(intent.queryTag)} places`) : da ? "steder" : "places")
+    : genre
     ? (da ? `${genre}-events` : `${genre} events`)
     : topics.length ? (intent.kind === "places" ? (da ? `steder med ${topics[0]}` : `${topics[0]} places`) : da ? `${topics[0]}-events` : `${topics[0]} events`)
-    : intent.queryTag && intent.queryTag !== "musik" ? (da ? `${intent.queryTag}-events` : `${intent.queryTag} events`)
+    : intent.queryTag && intent.queryTag !== "musik" ? (da ? `${human(intent.queryTag)}-events` : `${human(intent.queryTag)} events`)
     : intent.kind === "places" ? (da ? "steder" : "places")
     : "events";
   const free = intent.free ? (da ? "gratis " : "free ") : "";
