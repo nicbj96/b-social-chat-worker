@@ -431,6 +431,8 @@ export function looksUngroundedDiscoveryReply(reply: string): boolean {
   const text = String(reply || "");
   if (!text.trim()) return false;
   if (looksLikeRawToolCall(text)) return true;
+  // R24-1: a link to anything but b-social.net is an invented route.
+  if (/https?:\/\/(?!(?:www\.)?b-social\.net\b)[^\s)]+/i.test(text)) return true;
   if (/\(\s*search result\s*\)/i.test(text)) return true;
   if (/\b(placeholder|lorem ipsum|TODO|\[result\])\b/i.test(text)) return true;
   // Claims to have found things with no concrete place/event bullet lines.
@@ -818,7 +820,8 @@ const TOPIC_SYNONYMS: Record<string, string[]> = {
 };
 /** A row mentions the topic word (or a close synonym). */
 export function topicWordHit(row: Record<string, any>, word: string): boolean {
-  const hay = `${row.title ?? ""} ${row.description ?? ""} ${(Array.isArray(row.interest_tags) ? row.interest_tags.join(" ") : row.tags ?? "")}`.toLowerCase();
+  const tg = (v: any) => Array.isArray(v) ? v.join(" ") : String(v ?? "");
+  const hay = `${row.title ?? ""} ${row.name ?? ""} ${row.description ?? ""} ${tg(row.interest_tags)} ${tg(row.tags)} ${tg(row.main_categories)} ${tg(row.subcategory)}`.toLowerCase();
   return (TOPIC_SYNONYMS[word] ?? [word]).some((w) => hay.includes(w));
 }
 
