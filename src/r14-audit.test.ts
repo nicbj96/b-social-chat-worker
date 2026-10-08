@@ -121,3 +121,9 @@ describe("r18", () => {
     }
   });
 });
+
+describe("r18c", () => {
+  it("'Let me try to search again.' removed", () => {
+    expect(groundModelReply("Nothing found. Let me try to search again.", [], { lang: "en" }).reply).not.toMatch(/Let me/i);
+  });
+});
