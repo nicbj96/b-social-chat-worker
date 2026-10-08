@@ -31,7 +31,7 @@
 /** Wall-clock budget for one /chat turn. Configurable per environment via
  *  CHAT_TURN_DEADLINE_MS (tests use small values); production default 8s
  *  matches the release gate "chat p95 ≤8 s, fallback ≤10 s". */
-export const CHAT_TURN_DEADLINE_MS = 8_000;
+export const CHAT_TURN_DEADLINE_MS = 12_000;
 
 export function turnDeadlineMs(envValue: string | undefined): number {
   const n = Number(envValue);

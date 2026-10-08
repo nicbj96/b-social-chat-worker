@@ -76,7 +76,8 @@ describe("/chat model path — proposal, grounding, budget", () => {
     const res = await chat(envWith(ai, net), { messages: [{ role: "user", content: "find jazz" }], current_intent: currentIntent });
     const body = await res.json() as any;
     expect(body.event_ids).toEqual([UUID]);
-    expect(body.reply).toContain("Verified jazz — 25 EUR");
+    expect(body.reply).toMatch(/• Verified jazz — .* — 25 EUR/);
+    expect(body.reply).not.toContain("i døren");
     expect(body.reply).not.toContain("250 kr");
     expect(body.reply).not.toBe(null);
     expect(body.budget).toEqual({ model_calls: 2, embedding_calls: 1, caps: { model_calls: 2, embedding_calls: 1 } });
