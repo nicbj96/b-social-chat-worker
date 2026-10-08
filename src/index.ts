@@ -2058,7 +2058,15 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                       // A named genre is the subject: nothing in that genre is an
                       // honest empty answer, not STEP & AMBIENT called "jazz".
                       const g = chainGenre(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")));
-                      if (g) result.results = result.results.filter((e: any) => rowIsGenre(e, g));
+                      if (g) {
+                        result.results = result.results.filter((e: any) => rowIsGenre(e, g));
+                        // The first 8 music rows by date may hold no jazz at all:
+                        // ask the catalogue for the genre tag before answering empty.
+                        if (result.results.length === 0 && !fnArgs.tags) {
+                          const again = await searchEvents(supabase, { ...fnArgs, tags: g } as any);
+                          result.results = capToolRows(((again.results || []) as any[]).filter((e: any) => rowIsGenre(e, g)));
+                        }
+                      }
                     }
                     result.results.forEach((e: any) => {
                       if (!e?.id) return;

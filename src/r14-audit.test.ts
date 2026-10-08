@@ -215,3 +215,9 @@ describe("r21c", () => {
     expect(rowIsGenre({ title: "Popular science" }, "pop")).toBe(false);
   });
 });
+
+describe("r21d", () => {
+  it("bare bracket placeholder line removed", () => {
+    expect(groundModelReply("Ingen resultater.\n\n[jazzklubber København]\n\nNoget andet?", [], { lang: "da" }).reply).not.toContain("[");
+  });
+});
