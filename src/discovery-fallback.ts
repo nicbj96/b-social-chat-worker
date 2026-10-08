@@ -665,3 +665,37 @@ export function __resetAiBreaker(): void {
   aiConsecutiveFailures = 0;
   aiBreakerOpenUntil = 0;
 }
+
+const FOLLOW_UP_RE = /^\s*(?:og|and|men|but)?\s*(?:hvad|what)\s+(?:så\s+)?(?:med|about)\b/iu;
+
+/**
+ * Discovery intent for THIS turn, conversation-aware. A follow-up such as
+ * "og hvad med i morgen?" is not discovery-seeking on its own, which let the
+ * model answer it from memory with invented events. It inherits city/topic
+ * from the latest discovery question and REPLACES the date window with its own.
+ */
+export function resolveTurnDiscovery(userTexts: string[], contextCity?: string, now: Date = new Date()): { seeking: boolean; followUp: boolean; intent: DiscoveryIntent } {
+  const latest = userTexts[userTexts.length - 1] ?? "";
+  const own = inferDiscoveryIntent(latest, contextCity, now);
+  if (isDiscoverySeekingMessage(latest)) return { seeking: true, followUp: false, intent: own };
+  const short = latest.trim().length <= 80;
+  const looksFollowUp = FOLLOW_UP_RE.test(latest) || (short && (own.dateWindow != null || own.city != null));
+  if (looksFollowUp) {
+    for (let i = userTexts.length - 2; i >= 0; i -= 1) {
+      if (!isDiscoverySeekingMessage(userTexts[i])) continue;
+      const prev = inferDiscoveryIntent(userTexts[i], contextCity, now);
+      const merged: DiscoveryIntent = { ...prev };
+      if (own.city) merged.city = own.city;
+      if (own.dateWindow) merged.dateWindow = own.dateWindow;
+      return { seeking: true, followUp: true, intent: merged };
+    }
+  }
+  return { seeking: false, followUp: false, intent: own };
+}
+
+/** A model reply that lists events with clock times but made no tool call is invented. */
+export function looksLikeEventListing(reply: string): boolean {
+  const lines = String(reply || "").split("\n").filter(l => /^\s*(?:[*•\-]|\d+\.)\s+\S/.test(l));
+  const timed = lines.filter(l => /\b(?:kl\.?|klokken|at)\s*\d{1,2}(?:[:.]\d{2})?\b|\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b|\b\d{1,2}[:.]\d{2}\b/i.test(l));
+  return timed.length >= 1;
+}

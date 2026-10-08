@@ -38,3 +38,41 @@ export function narrowSemanticEvents<T extends Record<string, any>>(rows: T[], b
     return true;
   });
 }
+
+/** "tirsdag den 20. oktober 2026 kl. 20.00" in Europe/Copenhagen; "" when not a date. */
+export function danishWhen(iso: unknown): string {
+  if (typeof iso !== "string" || !Number.isFinite(Date.parse(iso))) return "";
+  const parts = new Intl.DateTimeFormat("da-DK", { timeZone: "Europe/Copenhagen", weekday: "long", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date(iso));
+  const g = (t: string) => parts.find(p => p.type === t)?.value ?? "";
+  return `${g("weekday")} den ${g("day")}. ${g("month")} ${g("year")} kl. ${g("hour").padStart(2, "0")}.${g("minute")}`;
+}
+
+/** Semantic RPC rows carry a raw UTC date; give the model the reader's local time and keep the raw value for grounding. */
+export function localizeSemanticRow<T extends Record<string, any>>(row: T): T {
+  if (row.date_raw !== undefined) return row;
+  const when = danishWhen(row.date);
+  return when ? { ...row, date_raw: row.date, date: when } : row;
+}
+
+/** Rows that actually match a genre the reader named (title/description/tags). */
+export function matchesTopic(row: Record<string, any>, topic: string): boolean {
+  const t = fold(topic);
+  if (!t) return true;
+  const tags = Array.isArray(row.interest_tags) ? row.interest_tags.join(" ") : String(row.tags ?? "");
+  return fold(`${row.title ?? ""} ${row.description ?? ""} ${tags} ${row.category ?? ""}`).includes(t);
+}
+
+/** Ids mentioned in the reply first; when the reply names any, only those. */
+export function idsByMention(items: { id?: string; title?: string; name?: string }[], reply: string): string[] {
+  const text = fold(reply);
+  const seen = new Set<string>();
+  const all: string[] = [];
+  const mentioned: string[] = [];
+  for (const it of items) {
+    if (!it?.id || seen.has(it.id)) continue;
+    seen.add(it.id); all.push(it.id);
+    const label = fold(it.title ?? it.name ?? "").trim();
+    if (label.length >= 3 && text.includes(label)) mentioned.push(it.id);
+  }
+  return mentioned.length > 0 ? mentioned : all;
+}
