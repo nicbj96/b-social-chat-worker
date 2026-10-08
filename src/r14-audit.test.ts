@@ -258,3 +258,12 @@ describe("r22d N4", () => {
     expect(normalizeBullets("Her:\n\n* A\n\n• B\n- C\n\n**Fed** tekst")).toBe("Her:\n\n• A\n• B\n• C\n\n**Fed** tekst");
   });
 });
+
+import { topicWordHit } from "./discovery-fallback";
+describe("r23", () => {
+  it("'gratis events' is Danish", () => { expect(inferResponseLanguage("gratis events")).toBe("da"); });
+  it("stand-up topic hit + synonyms", () => {
+    expect(topicWordHit({ title: "Comedy night" }, "stand-up")).toBe(true);
+    expect(topicWordHit({ title: "Vin & Vinyler" }, "stand-up")).toBe(false);
+  });
+});

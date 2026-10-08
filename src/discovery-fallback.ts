@@ -54,7 +54,7 @@ type EventResult = { id?: string; title?: string; location?: string; date?: stri
 const DANISH_LETTERS = /[æøå]/iu;
 
 const DANISH_WORDS =
-  /\b(hvad|hvor|hvornår|hvilke|jeg|ikke|noget|sker|kan|vil|skal|der|det|den|og|på|til|er|en|et|som|har|gerne|lidt|mig|dig|min|din|vise|find(?:e)?r|steder|aften|weekenden|nær|tak|hej)\b/giu;
+  /\b(hvad|hvor|hvornår|hvilke|gratis|koncerter?|morgen|udstillinger?|teater|foredrag|jeg|ikke|noget|sker|kan|vil|skal|der|det|den|og|på|til|er|en|et|som|har|gerne|lidt|mig|dig|min|din|vise|find(?:e)?r|steder|aften|weekenden|nær|tak|hej)\b/giu;
 
 const ENGLISH_WORDS =
   /\b(the|kids|activities|sunday|monday|tuesday|wednesday|thursday|friday|saturday|concerts?|music|events?|for|in|on|is|are|was|what|where|when|how|why|you|your|yours|me|my|mine|want|any|good|some|something|anything|there|their|give|ideas|happening|free|help|hello|hi|hey|please|show|near|nearby|around|this|these|those|tonight|tomorrow|today|weekend|looking|recommend|suggest|can|could|would|should|do|does|did|going|go|out|about|thanks|thank|in|of|on|from|with)\b/giu;
@@ -808,4 +808,22 @@ export function rowIsGenre(row: Record<string, any>, genre: string): boolean {
 export function chainGenre(userTexts: string[]): string | null {
   for (let i = userTexts.length - 1; i >= 0; i -= 1) { const g = namedGenre(userTexts[i]); if (g) return g; }
   return null;
+}
+
+const TOPIC_SYNONYMS: Record<string, string[]> = {
+  "stand-up": ["stand-up", "standup", "stand up", "comedy", "komik"],
+  standup: ["stand-up", "standup", "stand up", "comedy", "komik"],
+  comedy: ["stand-up", "standup", "comedy", "komik"],
+  teater: ["teater", "theatre", "theater", "forestilling"],
+};
+/** A row mentions the topic word (or a close synonym). */
+export function topicWordHit(row: Record<string, any>, word: string): boolean {
+  const hay = `${row.title ?? ""} ${row.description ?? ""} ${(Array.isArray(row.interest_tags) ? row.interest_tags.join(" ") : row.tags ?? "")}`.toLowerCase();
+  return (TOPIC_SYNONYMS[word] ?? [word]).some((w) => hay.includes(w));
+}
+
+/** Topic words minus music genres (the genre gate owns those). */
+export function nonGenreTopics(words?: string[]): string[] {
+  const genreWords = new Set(Object.entries(GENRES).flatMap(([k, v]) => [k, ...v]));
+  return (words ?? []).filter((w) => !genreWords.has(w));
 }

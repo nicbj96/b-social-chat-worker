@@ -48,7 +48,7 @@ import {
 } from "./chat-provider";
 import { rateLimitActorKey } from "./ratelimit";
 import { resolveChatTier } from "./plus-tier";
-import { chainGenre, rowIsGenre } from "./discovery-fallback";
+import { chainGenre, rowIsGenre, topicWordHit, nonGenreTopics, GENRES } from "./discovery-fallback";
 import { resolveTurnDiscovery, looksLikeEventListing, looksLikeUngroundedFact, clarifyDiscoveryReply } from "./discovery-fallback";
 import { aiBreakerIsOpen, searchEventsRelaxing, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 import type { DiscoveryIntent, Relaxation } from "./discovery-fallback";
@@ -1991,6 +1991,8 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                           const g = chainGenre(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")));
                           if (g) out.events = (out.events || []).filter((e: any) => rowIsGenre(e, g));
                         }
+                        // "stand-up Aarhus i morgen → og dagen efter?" stays stand-up.
+                        { const tws = nonGenreTopics(turnIntent.topicWords); if (tws.length) out.events = (out.events || []).filter((e: any) => tws.some((w) => topicWordHit(e, w))); }
                         out.events = out.events.slice(0, 8);
                         // A date-bounded question ("i weekenden", "tonight") rarely
                         // has its events in the semantic top-N. Top up from the
@@ -2009,7 +2011,8 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                           const gTop = chainGenre(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")));
                           const onTopicTop = (e: any) =>
                             (!turnIntent.queryTag || turnIntent.queryTag === "musik" || matchesTopic(e, turnIntent.queryTag) || (turnIntent.queryTag === turnIntent.eventCategory && !!turnIntent.eventCategory && String(e.category || "").includes(turnIntent.eventCategory === "familie" ? "børn" : turnIntent.eventCategory)))
-                            && (!gTop || rowIsGenre(e, gTop));
+                            && (!gTop || rowIsGenre(e, gTop))
+                            && (nonGenreTopics(turnIntent.topicWords).length === 0 || nonGenreTopics(turnIntent.topicWords).some((w) => topicWordHit(e, w)));
                           for (const e of sup.results || []) if (e?.id && !seen.has(e.id) && out.events.length < 8 && onTopicTop(e)) { out.events.push(e); seen.add(e.id); }
                         }
                         // M41 row cap: the model is never handed more than one
@@ -2074,7 +2077,8 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                         // The first 8 music rows by date may hold no jazz at all:
                         // ask the catalogue for the genre tag before answering empty.
                         if (result.results.length === 0 && !fnArgs.tags) {
-                          const again = await searchEvents(supabase, { ...fnArgs, tags: g } as any);
+                          // "elektronisk" is tagged "electronic"/"techno" in the catalogue.
+                          const again = await searchEvents(supabase, { ...fnArgs, tags: Array.from(new Set([g, ...(GENRES[g] ?? [])])).join(",") } as any);
                           result.results = capToolRows(((again.results || []) as any[]).filter((e: any) => rowIsGenre(e, g)));
                         }
                       }
