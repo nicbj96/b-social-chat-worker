@@ -2462,7 +2462,10 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
       // never from the model ("ingen events lørdag" when the window is fredag).
       if (groundedSources.length === 0 && !namedError && !deadlineHitMidTools) {
         const td = turnDiscovery(userMessages, ctx);
-        if (td.seeking) grounded = { ...grounded, reply: honestEmptyReply(td.intent, chainGenre(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? ""))), replyLang === "en" ? "en" : "da"), grounding: "verified" } as any;
+        // A retrieval that returned nothing cannot back a bulleted list either
+        // ("legepladser i Odense" → three invented playgrounds).
+        const listsRows = /^[ \t]*(?:[*•\-]|\d+\.)[ \t]+\S/m.test(String(grounded.reply || ""));
+        if (td.seeking || listsRows) grounded = { ...grounded, reply: honestEmptyReply(td.intent, chainGenre(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? ""))), replyLang === "en" ? "en" : "da"), grounding: "verified" } as any;
       }
 
       // M41 resource cap: the response payload is byte-capped, and any cut is

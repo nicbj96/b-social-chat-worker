@@ -317,3 +317,17 @@ describe("r24d", () => {
 describe("r24e", () => {
   it("legepladser is a topic", () => { expect(topicWordsOf("legepladser i Odense")).toContain("legeplads"); });
 });
+
+describe("r24f", () => {
+  it("place empty answer says places", () => {
+    expect(honestEmptyReply({ kind: "places", city: "Odense", topicWords: ["legeplads"], limit: 4 } as any, null, "da")).toContain("steder med legeplads i Odense");
+  });
+});
+
+describe("r24g", () => {
+  it("topic rows only when some match", () => {
+    const r = formatFallbackReply({ kind: "both", city: "København", topicWords: ["meditation"], limit: 4 } as any, [{ id: "p", name: "Supercykelsti", city: "København" } as any], [{ id: "e", title: "Meditation Session", location: "Østerbrohuset, København" } as any], "da", []);
+    expect(r.reply).toContain("Meditation Session");
+    expect(r.reply).not.toContain("Supercykelsti");
+  });
+});
