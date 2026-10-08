@@ -1,3 +1,4 @@
+import { normalizeBullets } from "./grounded-answer";
 import { describe, expect, it } from "vitest";
 import { buildGroundedSources, groundModelReply, renderGroundedFacts, type GroundedSource } from "./grounded-answer";
 
@@ -121,13 +122,13 @@ describe("groundModelReply — Danish date/time prose", () => {
     const text = "Her er nogle jazzkoncerter:\n\n* BØLLE på Drop inn den 10. oktober kl. 23.00 - popjazz.\n* NOLA JAZZ JAM den 13. oktober kl. 22.00 - New Orleans.";
     const out = groundModelReply(text, srcs, { lang: "da" });
     expect(out.grounding).toBe("verified");
-    expect(out.reply).toBe(text);
+    expect(out.reply).toBe(normalizeBullets(text));
   });
   it("drops only the wrong line and keeps the rest readable", () => {
     const text = "Her er nogle jazzkoncerter:\n* BØLLE den 10. oktober kl. 23.00.\n* NOLA JAZZ JAM den 13. oktober kl. 07.00.";
     const out = groundModelReply(text, srcs, { lang: "da" });
     expect(out.grounding).toBe("corrected");
-    expect(out.reply).toContain("* BØLLE den 10. oktober kl. 23.00.");
+    expect(out.reply).toContain("• BØLLE den 10. oktober kl. 23.00.");
     expect(out.reply).not.toContain("kl. 07.00");
     expect(out.reply).not.toMatch(/den 10\.\noktober/);
   });

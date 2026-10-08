@@ -211,7 +211,31 @@ export function renderReaderFacts(sources: GroundedSource[], lang: "da" | "en"):
   }).filter(Boolean);
 }
 
+/** N4: one bullet style ("•") and no blank lines inside a list. */
+export function normalizeBullets(text: string): string {
+  const lines = String(text || "").split("\n").map(l => l.replace(/^[ \t]*[*\-•][ \t]+(?=\S)/u, "• "));
+  const isB = (l: string) => l.startsWith("• ");
+  const out: string[] = [];
+  for (let k = 0; k < lines.length; k += 1) {
+    if (lines[k].trim() === "" && out.length && isB(out[out.length - 1])) {
+      let n = k + 1; while (n < lines.length && lines[n].trim() === "") n += 1;
+      if (n < lines.length && isB(lines[n])) continue;
+    }
+    out.push(lines[k]);
+  }
+  return out.join("\n");
+}
+
 export function groundModelReply(
+  modelText: string,
+  sources: GroundedSource[],
+  opts: { lang: "da" | "en"; retrievalError?: string | null },
+): GroundedAnswer {
+  const r = groundModelReplyInner(modelText, sources, opts);
+  return { ...r, reply: normalizeBullets(r.reply) };
+}
+
+function groundModelReplyInner(
   modelText: string,
   sources: GroundedSource[],
   opts: { lang: "da" | "en"; retrievalError?: string | null },

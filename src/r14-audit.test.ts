@@ -137,7 +137,7 @@ describe("r19", () => {
     const src: any[] = [{ kind: "event", id: "1", verified_fields: { title: "Lørdagsrytmik 1-2 år", date: "2026-10-10T07:30:00Z", date_raw: "2026-10-10T07:30:00Z" } }, { kind: "event", id: "2", verified_fields: { title: "Real", date: "2026-10-10T09:00:00Z", date_raw: "2026-10-10T09:00:00Z" } }];
     const r = groundModelReply("Her er:\n* Lørdagsrytmik for 1-2 år kl. 9:30\n* Fake Event kl. 12:00", src as any, { lang: "da" });
     expect(r.grounding).toBe("corrected");
-    expect(r.reply).not.toMatch(/• Lørdagsrytmik/);
+    expect((r.reply.match(/Lørdagsrytmik/g) || []).length).toBe(1);
   });
 });
 
@@ -249,5 +249,12 @@ describe("r22b", () => {
     expect(t.intent.city).toBe("Aarhus");
     expect(t.intent.free).toBe(true);
     expect(t.intent.eventCategory).toBeTruthy();
+  });
+});
+
+import { normalizeBullets } from "./grounded-answer";
+describe("r22d N4", () => {
+  it("one bullet style, no gaps inside lists, bold untouched", () => {
+    expect(normalizeBullets("Her:\n\n* A\n\n• B\n- C\n\n**Fed** tekst")).toBe("Her:\n\n• A\n• B\n• C\n\n**Fed** tekst");
   });
 });
