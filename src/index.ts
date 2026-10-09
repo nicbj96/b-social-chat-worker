@@ -2063,7 +2063,9 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                           // R32: the semantic top-N can hold one jazz row while the
                           // catalogue has eight; top up from the genre tags so the
                           // same question gives the same answer every time.
-                          if (g && !out.events_error && out.events.length < 4) {
+                          // R34: always merge the catalogue genre rows and sort by date,
+                          // so "jazz København" is the same list whichever tool ran.
+                          if (g && !out.events_error) {
                             try {
                               const sup = await searchEvents(createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY), {
                                 city: fnArgs.city ?? turnIntent.city,
@@ -2072,7 +2074,9 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                                 ...(turnIntent.free ? { free: true } : {}),
                               } as any);
                               const seenG = new Set(out.events.map((e: any) => e?.id));
-                              for (const e of (sup.results || []) as any[]) if (e?.id && !seenG.has(e.id) && rowIsGenre(e, g) && out.events.length < 8) { out.events.push(e); seenG.add(e.id); }
+                              for (const e of (sup.results || []) as any[]) if (e?.id && !seenG.has(e.id) && rowIsGenre(e, g)) { out.events.push(e); seenG.add(e.id); }
+                              const t = (e: any) => { const v = Date.parse(e?.date_raw ?? e?.date ?? ""); return Number.isFinite(v) ? v : Infinity; };
+                              out.events = out.events.sort((x: any, y: any) => t(x) - t(y)).slice(0, 8);
                             } catch { /* keep what we have */ }
                           }
                         }

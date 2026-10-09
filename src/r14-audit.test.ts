@@ -500,3 +500,11 @@ describe("r33b", () => {
     expect(r).toContain("Late Mic");
   });
 });
+
+describe("r34", () => {
+  it("English empty answer keeps the genre and English city", () => {
+    const r = honestEmptyReply({ kind: "events", city: "København", topicWords: ["techno"], limit: 4 } as any, null, "en");
+    expect(r).toContain("techno");
+    expect(r).toContain("Copenhagen");
+  });
+});

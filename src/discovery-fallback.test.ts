@@ -109,7 +109,7 @@ describe("formatFallbackReply", () => {
       [],
       "en",
     );
-    expect(response.reply).toContain("I found no events in København");
+    expect(response.reply).toContain("I found no events in Copenhagen");
   });
 });
 

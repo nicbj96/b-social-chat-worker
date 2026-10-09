@@ -899,8 +899,10 @@ export function nonGenreTopics(words?: string[]): string[] {
 }
 
 /** Deterministic "nothing found" sentence: the date label comes from the window itself. */
-export function honestEmptyReply(intent: DiscoveryIntent, genre: string | null, lang: "da" | "en"): string {
+export function honestEmptyReply(intent: DiscoveryIntent, genreIn: string | null, lang: "da" | "en"): string {
   const da = lang !== "en";
+  // R34: a genre named as a topic word ("techno") is still the subject.
+  const genre = genreIn ?? (intent.topicWords || []).find((w) => GENRES[w]) ?? null;
   const topics = nonGenreTopics(intent.topicWords);
   const human = (t: string) => t.replace(/[_-]+/g, " ").replace(/^mad drikke$/, "mad og drikke");
   const what = intent.kind === "places" && !genre
@@ -913,7 +915,8 @@ export function honestEmptyReply(intent: DiscoveryIntent, genre: string | null, 
     : intent.kind === "places" ? (da ? "steder" : "places")
     : "events";
   const free = intent.free ? (da ? "gratis " : "free ") : "";
-  const where = intent.city ? (da ? ` i ${intent.city}` : ` in ${intent.city}`) : "";
+  const enCity = (c: string) => ({ "København": "Copenhagen", "Århus": "Aarhus" } as Record<string, string>)[c] ?? c;
+  const where = intent.city ? (da ? ` i ${intent.city}` : ` in ${enCity(intent.city)}`) : "";
   let when = "";
   const w = intent.dateWindow;
   if (w) {
