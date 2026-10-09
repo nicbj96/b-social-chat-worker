@@ -601,12 +601,10 @@ describe("audit #1: date-aware intent and gradual relaxation", () => {
       calls.push(f);
       return f.category || f.date_from ? { results: [] } : { results: [{ id: "e1", title: "X" }] };
     });
-    expect(calls.map((c) => [Boolean(c.date_from), c.category])).toEqual([[true, "familie"], [false, "familie"], [false, undefined]]);
+    // R27: the category is never dropped — off-topic rows are worse than an honest empty.
+    expect(calls.map((c) => [Boolean(c.date_from), c.category])).toEqual([[true, "familie"], [false, "familie"]]);
     expect(calls.every((c) => c.city === "Aarhus")).toBe(true);
-    expect(r.relaxed).toEqual(["date", "category"]);
-    const reply = formatFallbackReply(intent, [], r.results, "da", r.relaxed).reply;
-    expect(reply).toContain("datoen og kategorien");
-    expect(reply).toContain("• X");
+    expect(r.results).toEqual([]);
   });
 
   it("stops at the first step that has results and stays silent about relaxation", async () => {

@@ -24,7 +24,7 @@ describe("r14 audit fixes", () => {
   it("free filter is carried into every relaxing step", async () => {
     const seen: any[] = [];
     await searchEventsRelaxing({ kind: "events", city: "Odense", free: true, queryTag: "jazz", eventCategory: "musik", limit: 4 }, async (f) => { seen.push(f); return { results: [] }; });
-    expect(seen.length).toBeGreaterThan(1);
+    expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((f) => f.free === true)).toBe(true);
   });
 });

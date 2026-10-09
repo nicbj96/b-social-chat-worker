@@ -1334,6 +1334,17 @@ async function directDiscoveryFallback(
     relaxed = result.relaxed;
     if (result.error) failed = true;
     events = result.results || [];
+    // R27: "i morgen" must not list tonight's concert that merely ends after
+    // midnight; keep started rows only when they are genuine multi-day runs.
+    const fromMs = intent.dateWindow ? Date.parse(intent.dateWindow.from) : NaN;
+    if (Number.isFinite(fromMs) && !result.relaxed?.includes("date")) {
+      events = events.filter((e: any) => {
+        const start = Date.parse(e.date_raw ?? "");
+        if (!Number.isFinite(start) || start >= fromMs) return true;
+        const end = e.end_date ? Date.parse(e.end_date) : NaN;
+        return Number.isFinite(end) && end - start >= 20 * 3600 * 1000;
+      });
+    }
   }
 
   // "techno" → "og i Aarhus?": the genre still rules; no shelters or comedy.
