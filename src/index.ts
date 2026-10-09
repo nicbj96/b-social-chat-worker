@@ -2518,7 +2518,9 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
             const placeOnly = twG.length > 0 && twG.every((w) => ["café", "bar", "biograf", "museum"].includes(w));
             const keepIds = new Set<string>();
             for (const g of groundedToolResults as any[]) {
-              g.rows = placeOnly && g.kind === "event" ? [] : (g.rows || []).filter((r: any) => on(r, g.kind));
+              // Place rows already pass the place-path gates (name needles,
+              // blanket-tag rule); re-gating them here dropped real cafés.
+              g.rows = placeOnly && g.kind === "event" ? [] : g.kind !== "event" ? (g.rows || []) : (g.rows || []).filter((r: any) => on(r, g.kind));
               for (const r of g.rows) if (r?.id) keepIds.add(String(r.id));
             }
             for (let i = groundedToolResults.length - 1; i >= 0; i--) if (!((groundedToolResults[i] as any).rows || []).length) groundedToolResults.splice(i, 1);
