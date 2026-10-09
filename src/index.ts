@@ -2524,6 +2524,21 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
               for (const r of g.rows) if (r?.id) keepIds.add(String(r.id));
             }
             for (let i = groundedToolResults.length - 1; i >= 0; i--) if (!((groundedToolResults[i] as any).rows || []).length) groundedToolResults.splice(i, 1);
+            // R28: "caféer/biograf i København" routed to an events-only tool still
+            // gets the real places, found by name.
+            if (placeOnly && tdG.intent.city && !(groundedToolResults as any[]).some((g) => g.kind === "place")) {
+              const needles = placeNameNeedles(twG);
+              if (needles.length) {
+                try {
+                  const byName = await searchPlaces(createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY), { city: tdG.intent.city, name_like: needles.join(",") } as any);
+                  const rows = ((byName.results || []) as any[]).slice(0, 8);
+                  if (rows.length) {
+                    groundedToolResults.push({ kind: "place", retrieved_at: new Date().toISOString(), rows } as any);
+                    for (const p of rows) if (p?.id) { keepIds.add(String(p.id)); collectedPlaceIds.push(p.id); collectedPlaces.push({ id: p.id, name: p.name, city: p.city }); }
+                  }
+                } catch { /* honest empty below */ }
+              }
+            }
             const prune = (arr: any[], idOf: (x: any) => any) => { for (let i = arr.length - 1; i >= 0; i--) if (!keepIds.has(String(idOf(arr[i])))) arr.splice(i, 1); };
             prune(collectedEventIds, (x) => x); prune(collectedPlaceIds, (x) => x);
             prune(collectedEvents, (x) => x?.id); prune(collectedPlaces, (x) => x?.id);
