@@ -280,7 +280,7 @@ describe("r24", () => {
   });
   it("stand-up dagen efter = lørdag", () => {
     const t = resolveTurnDiscovery(["stand-up Aarhus i morgen", "og dagen efter?"], undefined, new Date("2026-10-08T10:00:00Z"));
-    expect(honestEmptyReply(t.intent, null, "da")).toContain("stand-up-events i Aarhus lørdag den 10. oktober");
+    expect(honestEmptyReply(t.intent, null, "da")).toContain("stand-up-shows i Aarhus lørdag den 10. oktober");
   });
 });
 
@@ -506,5 +506,21 @@ describe("r34", () => {
     const r = honestEmptyReply({ kind: "events", city: "København", topicWords: ["techno"], limit: 4 } as any, null, "en");
     expect(r).toContain("techno");
     expect(r).toContain("Copenhagen");
+  });
+});
+
+import { sortBulletRunsByDate } from "./card-sync";
+describe("r35", () => {
+  it("bullets are put in date order", () => {
+    const r = sortBulletRunsByDate("Her:\n• B show — 20:00\n• A show — 19:30\nSlut", [{ title: "A show", date: "2026-10-10T17:30:00Z" }, { title: "B show", date: "2026-10-10T18:00:00Z" }]);
+    expect(r).toBe("Her:\n• A show — 19:30\n• B show — 20:00\nSlut");
+  });
+  it("Danish empty answer uses a natural noun", () => {
+    const r = honestEmptyReply({ kind: "events", city: "Odense", topicWords: ["legeplads"], limit: 4 } as any, null, "da");
+    expect(r).toContain("legepladser");
+    expect(r).not.toContain("legeplads-events");
+  });
+  it("chatty opener goes", () => {
+    expect(syncBulletsToItems("Hej! Her er nogle shows:\n• Late Mic — kl. 23", [{ title: "Late Mic" }])).toMatch(/^Her er nogle shows:/);
   });
 });
