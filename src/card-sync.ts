@@ -35,11 +35,19 @@ export function syncBulletsToItems(reply: string, items: { title?: string; name?
   // becomes a bullet, so text and cards agree.
   {
     const firstBullet = lines.findIndex((l) => BULLET_RE.test(l));
-    if (firstBullet > 0) lines = lines.map((l, i) => {
-      if (i >= firstBullet || BULLET_RE.test(l)) return l;
-      const f = fold(l);
-      return labels.some((lb) => lb.core.length >= 4 && f.startsWith(lb.core)) ? `• ${l.trim()}` : l;
-    });
+    if (firstBullet >= 0) {
+      const listed = lines.filter((l) => BULLET_RE.test(l)).map((l) => fold(l.replace(/^[ \t]*(?:[•*\-]|\d+\.)[ \t]+/, "")));
+      lines = lines.map((l, i) => {
+        if (i >= firstBullet && BULLET_RE.test(l)) return l;
+        const f = fold(l.replace(/^[ \t]*(?:[•*\-]|\d+\.)[ \t]+/, ""));
+        const lb = labels.find((x) => x.core.length >= 3 && (f.startsWith(x.core) || f.includes(` ${x.core} `)));
+        if (!lb) return l;
+        // Already in the list further down: the prose/duplicate line goes.
+        const elsewhere = listed.filter((b) => b.startsWith(lb.core)).length;
+        if (BULLET_RE.test(l) ? elsewhere > 1 && i < firstBullet + 0 : elsewhere > 0) return "";
+        return BULLET_RE.test(l) ? l : `• ${l.trim()}`;
+      });
+    }
   }
   const bulletIdx = lines.map((l, i) => (BULLET_RE.test(l) ? i : -1)).filter((i) => i >= 0);
   if (!bulletIdx.length) return reply;
@@ -47,7 +55,21 @@ export function syncBulletsToItems(reply: string, items: { title?: string; name?
     const f = fold(line);
     return labels.some((l) => f.includes(l.core) || f.includes(l.full) || (l.full.length > 12 && f.includes(l.full.slice(0, 18))));
   };
-  const keep = bulletIdx.filter((i) => named(lines[i]));
+  let keep = bulletIdx.filter((i) => named(lines[i]));
+  {
+    const owner = (line: string) => { const f = fold(line.replace(/^[ \t]*(?:[•*\-]|\d+\.)[ \t]+/, "")); return labels.find((l) => f.startsWith(l.core))?.core ?? null; };
+    const byOwner = new Map<string, number[]>();
+    for (const i of keep) { const o = owner(lines[i]); if (o) byOwner.set(o, [...(byOwner.get(o) || []), i]); }
+    const drop = new Set<number>();
+    for (const [, idx] of byOwner) if (idx.length > 1) {
+      // Same title with different dates is fine (NOLA JAZZ JAM ×2); identical
+      // item twice is not — keep the line that carries a price/date marker.
+      const sig = (i: number) => fold(lines[i]).match(/\d{1,2}[.:]\d{2}|\d{1,2}\.\s*\p{L}+/gu)?.join("|") ?? "";
+      const seenSig = new Map<string, number>();
+      for (const i of idx) { const k = sig(i) || "nosig"; if (seenSig.has(k) || k === "nosig" && idx.some((j) => j !== i && sig(j))) drop.add(i); else seenSig.set(k, i); }
+    }
+    keep = keep.filter((i) => !drop.has(i));
+  }
   // Nothing recognisable: leave the reply alone rather than empty it.
   if (keep.length === 0) return reply;
   const drop = new Set(bulletIdx.filter((i) => !keep.includes(i)));

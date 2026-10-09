@@ -493,3 +493,10 @@ describe("r33", () => {
     expect(r).toContain("Vil du have mere?");
   });
 });
+describe("r33b", () => {
+  it("prose items already listed are not duplicated", () => {
+    const r = syncBulletsToItems("• Anders Morgenstierne har premiere på Citizen kl. 21.\n\n• Late Mic finder sted kl. 23.\n\n• Sebastian Dorset: Dyrenes konge — fre. 9. okt. kl. 18:45\n• Anders Morgenstierne: ONE SCOOP OF VANILLA — fre. 9. okt. kl. 21:00", [{ title: "Late Mic" }, { title: "Sebastian Dorset: Dyrenes konge" }, { title: "Anders Morgenstierne: ONE SCOOP OF VANILLA" }]);
+    expect(r.split("\n").filter((l) => l.startsWith("•")).length).toBe(3);
+    expect(r).toContain("Late Mic");
+  });
+});
