@@ -92,9 +92,10 @@ describe("directDiscoveryFallback — date + relaxation (audit #1)", () => {
     const res = await worker.fetch(chatRequest("noget for børn på søndag i Aarhus"), baseEnv(ai), executionContext());
     const body: any = await res.json();
     expect(body.reply).not.toContain("kan ikke svare");
-    expect(body.reply).toContain("Børneteater");
-    expect(body.reply).toContain("datoen");
-    expect(body.event_ids).toEqual([KIDS.id]);
+    // R27: a named day is never answered with other days — honest empty instead.
+    expect(body.reply).not.toContain("Børneteater");
+    expect(body.reply).toContain("Aarhus");
+    expect(body.event_ids ?? []).toEqual([]);
     // first call carried the Copenhagen window for Sunday
     expect(search.mock.calls[0][1].date_from).toMatch(/Z$/);
     expect(search.mock.calls[0][1].category).toBe("familie");

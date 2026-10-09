@@ -602,7 +602,7 @@ describe("audit #1: date-aware intent and gradual relaxation", () => {
       return f.category || f.date_from ? { results: [] } : { results: [{ id: "e1", title: "X" }] };
     });
     // R27: the category is never dropped — off-topic rows are worse than an honest empty.
-    expect(calls.map((c) => [Boolean(c.date_from), c.category])).toEqual([[true, "familie"], [false, "familie"]]);
+    expect(calls.map((c) => [Boolean(c.date_from), c.category])).toEqual([[true, "familie"]]);
     expect(calls.every((c) => c.city === "Aarhus")).toBe(true);
     expect(r.results).toEqual([]);
   });

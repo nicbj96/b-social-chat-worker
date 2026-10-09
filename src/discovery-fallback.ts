@@ -160,7 +160,7 @@ const CATEGORY_RULES = [
   { test: /\b(motion|fitness|løb|cykel|sport)\w*/iu, placeCategory: "motion-fitness", eventCategory: "sport", tag: "sport" },  // was "motion": 0 events carry it
 ] as const;
 
-const TOPIC_WORDS = ["legeplads", "yoga", "pilates", "dans", "salsa", "tango", "quiz", "standup", "stand-up", "comedy", "teater", "opera", "ballet", "foredrag", "workshop", "loppemarked", "marked", "brætspil", "gaming", "esport", "vinsmagning", "ølsmagning", "padel", "klatring", "løbetur", "maraton", "meditation", "poesi", "film", "biograf", "karaoke", "techno", "rock", "metal", "hiphop", "rap", "klassisk"];
+const TOPIC_WORDS = ["legeplads", "yoga", "pilates", "dans", "salsa", "tango", "quiz", "standup", "stand-up", "comedy", "teater", "opera", "ballet", "foredrag", "workshop", "loppemarked", "marked", "udstilling", "brætspil", "gaming", "esport", "vinsmagning", "ølsmagning", "padel", "klatring", "løbetur", "maraton", "meditation", "poesi", "film", "biograf", "karaoke", "techno", "rock", "metal", "hiphop", "rap", "klassisk"];
 export function topicWordsOf(message: string): string[] {
   const low = String(message || "").toLowerCase();
   // "børneteater"/"dukketeater" are theatre: compound heads count for these.
@@ -371,9 +371,9 @@ export async function searchEventsRelaxing(
   const tws = nonGenreTopics(intent.topicWords);
   if (tws.length && !base.tags) {
     const tagged = { ...base, category: undefined, tags: topicTagList(tws).join(",") };
-    steps.unshift(...(intent.dateWindow ? [{ filters: { ...tagged, date_from: intent.dateWindow.from, date_to: intent.dateWindow.to }, relaxed: [] as Relaxation[] }] : []), { filters: tagged, relaxed: intent.dateWindow ? ["date"] as Relaxation[] : [] });
+    steps.unshift(...(intent.dateWindow ? [{ filters: { ...tagged, date_from: intent.dateWindow.from, date_to: intent.dateWindow.to }, relaxed: [] as Relaxation[] }] : [{ filters: tagged, relaxed: [] as Relaxation[] }]));
   }
-  if (intent.dateWindow) steps.push({ filters: base, relaxed: ["date"] });
+  // R27: the reader named a day; other days are not an answer to it.
   if (hasCategory && false) {
     steps.push({ filters: { city: intent.city, ...(intent.free ? { free: true } : {}), ...(intent.country && !intent.city ? { country: intent.country } : {}) }, relaxed: intent.dateWindow ? ["date", "category"] : ["category"] });
   }
@@ -861,6 +861,7 @@ const TOPIC_SYNONYMS: Record<string, string[]> = {
   film: ["film", "filmaften", "biograf", "cinema", "kino"],
   biograf: ["biograf", "cinema", "kino", "bio"],
   marked: ["marked", "markedet", "loppemarked", "julemarked", "market"],
+  udstilling: ["udstilling", "exhibition", "vernissage", "fernisering"],
   "børneteater": ["børneteater", "dukketeater", "børneforestilling", "familieforestilling", "teater for børn", "forestilling for børn"],
 };
 /** A row mentions the topic word (or a close synonym). */
