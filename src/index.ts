@@ -48,7 +48,7 @@ import {
 } from "./chat-provider";
 import { rateLimitActorKey } from "./ratelimit";
 import { resolveChatTier } from "./plus-tier";
-import { syncBulletsToItems } from "./card-sync";
+import { syncBulletsToItems, idsNamedInReply } from "./card-sync";
 import { detailOrdinal, listedTitles, pickTitle, renderEventDetail, renderPlaceDetail } from "./detail-followup";
 import { chainGenre, rowIsGenre, topicWordHit, nonGenreTopics, GENRES, honestEmptyReply, topicTagList, placeNameNeedles, placeTopicsOf } from "./discovery-fallback";
 import { resolveTurnDiscovery, looksLikeEventListing, looksLikeUngroundedFact, clarifyDiscoveryReply } from "./discovery-fallback";
@@ -2634,8 +2634,8 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
               intent_proposal: turnIntentProposal,
               tool_calls_made: aiResponse.tool_calls.map((tc: any) => tc.function.name),
               // Cards follow the prose: the rows the reply names, first.
-              place_ids: idsByMention(collectedPlaces.length ? collectedPlaces : collectedPlaceIds.map((id) => ({ id })), grounded.reply),
-              event_ids: idsByMention(collectedEvents.length ? collectedEvents : collectedEventIds.map((id) => ({ id })), grounded.reply),
+              place_ids: idsNamedInReply(collectedPlaces.length ? collectedPlaces : collectedPlaceIds.map((id) => ({ id })), grounded.reply),
+              event_ids: idsNamedInReply(collectedEvents.length ? collectedEvents : collectedEventIds.map((id) => ({ id })), grounded.reply),
               suggested_tag_slugs: [...new Set(collectedTagSlugs)],
               partial: deadlineHitMidTools || undefined,
               ...(rowsCapped ? { rows_capped: RESOURCE_CAPS.rows } : {}),
