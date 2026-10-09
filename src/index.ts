@@ -48,6 +48,7 @@ import {
 } from "./chat-provider";
 import { rateLimitActorKey } from "./ratelimit";
 import { resolveChatTier } from "./plus-tier";
+import { syncBulletsToItems } from "./card-sync";
 import { detailOrdinal, listedTitles, pickTitle, renderEventDetail, renderPlaceDetail } from "./detail-followup";
 import { chainGenre, rowIsGenre, topicWordHit, nonGenreTopics, GENRES, honestEmptyReply, topicTagList, placeNameNeedles, placeTopicsOf } from "./discovery-fallback";
 import { resolveTurnDiscovery, looksLikeEventListing, looksLikeUngroundedFact, clarifyDiscoveryReply } from "./discovery-fallback";
@@ -2617,6 +2618,11 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
       // R29: places carry no price; "gratis" cannot be confirmed for them.
       if (collectedEventIds.length === 0 && collectedPlaceIds.length > 0 && turnDiscovery(userMessages, ctx).intent.free) {
         grounded = { ...grounded, reply: `${replyLang === "en" ? "The catalogue has no admission prices for places, so I can't confirm which are free. Places matching your search:" : "Kataloget har ikke entrépriser for steder, så jeg kan ikke bekræfte, hvilke der er gratis. Steder der passer på din søgning:"}\n${String(grounded.reply || "").replace(/^[^\n•]*:\s*\n/, "")}` };
+      }
+
+      // R30: bullets and cards are the same set; no blanket claims over the list.
+      if (!deadlineHitMidTools && (collectedEvents.length || collectedPlaces.length)) {
+        grounded = { ...grounded, reply: syncBulletsToItems(String(grounded.reply || ""), [...collectedEvents, ...collectedPlaces] as any[]) };
       }
 
       // M41 resource cap: the response payload is byte-capped, and any cut is

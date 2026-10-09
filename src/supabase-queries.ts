@@ -21,8 +21,9 @@ const CITY_SPELLING_ALIASES: Record<string, string[]> = {
   århus: ["Aarhus", "Århus"],
   aalborg: ["Aalborg", "Ålborg"],
   ålborg: ["Aalborg", "Ålborg"],
-  københavn: ["København", "Copenhagen"],
-  copenhagen: ["København", "Copenhagen"],
+  // R30: København Kommune's districts are København ("Tingbjerg … Brønshøj").
+  københavn: ["København", "Copenhagen", "Kbh", "Brønshøj", "Vanløse", "Valby", "Nørrebro", "Østerbro", "Vesterbro", "Amager", "Sydhavn", "Nordvest", "Ørestad", "Islands Brygge", "Tingbjerg", "Bispebjerg", "Husum"],
+  copenhagen: ["København", "Copenhagen", "Kbh", "Brønshøj", "Vanløse", "Valby", "Nørrebro", "Østerbro", "Vesterbro", "Amager", "Sydhavn", "Nordvest", "Ørestad", "Islands Brygge", "Tingbjerg", "Bispebjerg", "Husum"],
 };
 
 export function citySearchNeedles(city: string | undefined | null): string[] {

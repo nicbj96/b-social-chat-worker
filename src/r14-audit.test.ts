@@ -422,3 +422,19 @@ describe("r29 detail follow-up", () => {
     expect(pickTitle(listedTitles("Her er et jazz-event i København:\nYoni Mayraz (UK) på KLEIN, København den 27. november kl. 20.30.\n\nVil du have flere?"), 0)).toBe("Yoni Mayraz");
   });
 });
+
+import { syncBulletsToItems } from "./card-sync";
+import { citySearchNeedles } from "./supabase-queries";
+describe("r30", () => {
+  it("drops bullets for items that were never retrieved, and blanket claims", () => {
+    const r = syncBulletsToItems("Her er nogle:\n• Guys and Dolls på Det Ny Teater, kl. 14.30\n• Pelles Fest, kl. 19.30\n\nBegge events er gratis og åbne for grupper. Vil du have mere?", [{ title: "Guys and Dolls" }]);
+    expect(r).toContain("Guys and Dolls");
+    expect(r).not.toContain("Pelles");
+    expect(r).not.toContain("åbne for grupper");
+    expect(r).toContain("Vil du have mere?");
+  });
+  it("keeps the reply when no bullet is recognisable", () => {
+    expect(syncBulletsToItems("• X\n• Y", [{ title: "Helt andet" }])).toBe("• X\n• Y");
+  });
+  it("København includes its districts", () => { expect(citySearchNeedles("København")).toContain("Brønshøj"); });
+});
