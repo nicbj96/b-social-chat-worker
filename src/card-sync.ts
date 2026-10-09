@@ -84,6 +84,8 @@ export function syncBulletsToItems(reply: string, items: { title?: string; name?
     return !!next && BULLET_RE.test(next);
   }).join("\n");
   out = sortBulletRunsByDate(out, items);
+  // R37: one bullet style; bold markers inside bullets go.
+  out = out.split("\n").map((l) => BULLET_RE.test(l) ? l.replace(/\*\*/g, "").replace(/^[ \t]*(?:[*\-]|\d+\.)[ \t]+/, "• ") : l).join("\n");
   // R36: "søndag den 15.30" — a clock time written as a date.
   out = out.replace(/\bden (\d{1,2})[.:](\d{2})(?!\d)/g, "kl. $1.$2");
   // R36: an orphan fragment left after the list ("oktober 2026. Billetprisen er 135 DKK.").
@@ -116,9 +118,12 @@ export function sortBulletRunsByDate(reply: string, items: { title?: string; nam
     if (!BULLET_RE.test(lines[i])) { i++; continue; }
     let j = i; while (j < lines.length && BULLET_RE.test(lines[j])) j++;
     const run = lines.slice(i, j).map((l, k) => ({ l, k, t: timeOf(l) }));
-    if (run.length > 1 && run.every((r) => r.t !== null)) {
-      run.sort((a, b) => (a.t! - b.t!) || (a.k - b.k));
-      for (let k = 0; k < run.length; k++) lines[i + k] = run[k].l;
+    // R37: sort the dated bullets among their own slots even when one bullet is unmatched.
+    const dated = run.filter((r) => r.t !== null);
+    if (dated.length > 1) {
+      const sorted = [...dated].sort((a, b) => (a.t! - b.t!) || (a.k - b.k));
+      let q = 0;
+      for (const r of run) if (r.t !== null) lines[i + r.k] = sorted[q++].l;
     }
     i = j;
   }
