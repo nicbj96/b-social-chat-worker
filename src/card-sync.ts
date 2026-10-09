@@ -84,6 +84,8 @@ export function syncBulletsToItems(reply: string, items: { title?: string; name?
     return !!next && BULLET_RE.test(next);
   }).join("\n");
   out = sortBulletRunsByDate(out, items);
+  // R39: no emoji in answers ("Der er flere koncerter i aften! 🎸").
+  out = out.replace(/\s?[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]\u{FE0F}?/gu, "");
   // R37: one bullet style; bold markers inside bullets go.
   out = out.split("\n").map((l) => BULLET_RE.test(l) ? l.replace(/\*\*/g, "").replace(/^[ \t]*(?:[*\-]|\d+\.)[ \t]+/, "• ") : l).join("\n");
   // R36: "søndag den 15.30" — a clock time written as a date.
@@ -173,7 +175,11 @@ export function idsNamedInReply(items: { id?: string; title?: string; name?: str
   if (bullets.length) {
     const used = new Set<string>();
     const out: string[] = [];
-    for (const b of bullets) {
+    const rawBullets = String(reply || "").split("\n").filter((l) => BULLET_RE.test(l)).map((l) => fold(l.replace(/^[ \t]*(?:[•*\-]|\d+\.)[ \t]+/, "")));
+    for (const [bi, b0] of bullets.entries()) {
+      // R39: "Koncert med Fistful Of Dollars" — the title itself starts with "koncert".
+      const hitOf = (b: string) => uniq.find((u) => !used.has(u.id) && u.core.length >= 2 && (b.startsWith(u.core) || b.startsWith(u.full) || (u.core.length >= 10 && b.includes(u.core)) || (u.full.length >= 8 && b.includes(u.full))));
+      const b = hitOf(b0) ? b0 : rawBullets[bi];
       const hit = uniq.find((u) => !used.has(u.id) && u.core.length >= 2 && (b.startsWith(u.core) || b.startsWith(u.full) || (u.core.length >= 10 && b.includes(u.core)) || (u.full.length >= 8 && b.includes(u.full))));
       if (hit) { used.add(hit.id); out.push(hit.id); }
     }

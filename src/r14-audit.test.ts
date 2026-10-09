@@ -1,3 +1,4 @@
+import { vi as viR39 } from "vitest";
 import { describe, it, expect } from "vitest";
 import { resolveTurnDiscovery, looksLikeUngroundedFact, searchEventsRelaxing } from "./discovery-fallback";
 const now = new Date("2026-10-08T10:00:00Z");
@@ -559,5 +560,20 @@ describe("r38b", () => {
   it("bullets with an age prefix sort by their written date", () => {
     const r = sortBulletRunsByDate("• (5-6 år) Butter - lørdag den 3. april 2027\n• (7-9 år) Drøm - lørdag den 16. januar 2027\n• Frøken Larsen - lørdag den 24. oktober 2026", [{ title: "Frøken Larsens Store Kærlighed", date: "2026-10-24T09:00:00Z" }, { title: "Noget andet", date: "2026-11-01T09:00:00Z" }]);
     expect(r.split("\n").map((l) => l.slice(0, 12))).toEqual(["• Frøken Lar", "• (7-9 år) D", "• (5-6 år) B"]);
+  });
+});
+describe("r39", () => {
+  it("bullet whose title starts with 'Koncert' gets its card", () => {
+    expect(idsNamedInReply([{ id: "a", title: "Koncert med Fistful Of Dollars" }, { id: "b", title: "Elsusi - koncert & talk" }], "Her:\n• Koncert med Fistful Of Dollars i Solrød kl. 18.00\n• Elsusi - koncert & talk i Union", true)).toEqual(["a", "b"]);
+  });
+  it("weekend asked on Saturday names Saturday to Sunday", () => {
+    viR39.useFakeTimers(); viR39.setSystemTime(new Date("2026-10-09T22:30:00Z"));
+    const w = resolveDateWindow("koncerter i weekenden", new Date("2026-10-09T22:30:00Z"))!;
+    const r = honestEmptyReply({ kind: "events", city: "Aarhus", eventCategory: "musik", dateWindow: w, limit: 4 } as any, null, "da");
+    viR39.useRealTimers();
+    expect(r).toContain("fra lørdag 10. oktober til søndag 11. oktober");
+  });
+  it("emoji go", () => {
+    expect(syncBulletsToItems("Der er koncerter i aften! 🎸 Her:\n• Akrobat kl. 18", [{ title: "Akrobat" }])).toBe("Der er koncerter i aften! Her:\n• Akrobat kl. 18");
   });
 });
