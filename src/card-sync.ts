@@ -67,5 +67,10 @@ export function idsNamedInReply(items: { id?: string; title?: string; name?: str
       if (bullets.some((b) => b.startsWith(core) || b.startsWith(full) || (core.length >= 10 && b.includes(core)))) named.push(String(it.id));
     } else if (text.includes(core) || text.includes(full) || (full.length > 12 && text.includes(full.slice(0, 18)))) named.push(String(it.id));
   }
-  return named.length ? named : all;
+  // One card per listed title: a run of dates or a duplicate catalogue row
+  // ("Mosaik Workshop" ×3, "Empire Bio" ×2) is still one bullet.
+  const byId = new Map(items.filter((it) => it?.id).map((it) => [String(it.id), fold(String(it.title ?? it.name ?? ""))]));
+  const titles = new Set<string>();
+  const uniq = (ids: string[]) => ids.filter((id) => { const t = byId.get(id) || id; if (titles.has(t)) return false; titles.add(t); return true; });
+  return named.length ? uniq(named) : all;
 }

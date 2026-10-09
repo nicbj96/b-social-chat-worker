@@ -451,3 +451,8 @@ describe("r30c", () => {
     expect(ids).toEqual(["a", "j"]);
   });
 });
+describe("r30d", () => {
+  it("one card per title", () => {
+    expect(idsNamedInReply([{ id: "a", title: "Mosaik Workshop" }, { id: "b", title: "Mosaik Workshop" }, { id: "c", title: "BØLLE" }], "• Mosaik Workshop på X\n• BØLLE på Y")).toEqual(["a", "c"]);
+  });
+});
