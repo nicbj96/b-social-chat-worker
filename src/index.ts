@@ -2060,6 +2060,21 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                         {
                           const g = chainGenre(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")));
                           if (g) out.events = (out.events || []).filter((e: any) => rowIsGenre(e, g));
+                          // R32: the semantic top-N can hold one jazz row while the
+                          // catalogue has eight; top up from the genre tags so the
+                          // same question gives the same answer every time.
+                          if (g && !out.events_error && out.events.length < 4) {
+                            try {
+                              const sup = await searchEvents(createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY), {
+                                city: fnArgs.city ?? turnIntent.city,
+                                tags: Array.from(new Set([g, ...(GENRES[g] ?? [])])).join(","),
+                                ...(turnWindow ? { date_from: turnWindow.from, date_to: turnWindow.to } : {}),
+                                ...(turnIntent.free ? { free: true } : {}),
+                              } as any);
+                              const seenG = new Set(out.events.map((e: any) => e?.id));
+                              for (const e of (sup.results || []) as any[]) if (e?.id && !seenG.has(e.id) && rowIsGenre(e, g) && out.events.length < 8) { out.events.push(e); seenG.add(e.id); }
+                            } catch { /* keep what we have */ }
+                          }
                         }
                         // "stand-up Aarhus i morgen → og dagen efter?" stays stand-up.
                         { const tws = nonGenreTopics(turnIntent.topicWords); if (tws.length) out.events = (out.events || []).filter((e: any) => tws.some((w) => topicWordHit(e, w))); }

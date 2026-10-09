@@ -160,7 +160,7 @@ const CATEGORY_RULES = [
   { test: /\b(motion|fitness|løb|cykel|sport)\w*/iu, placeCategory: "motion-fitness", eventCategory: "sport", tag: "sport" },  // was "motion": 0 events carry it
 ] as const;
 
-const TOPIC_WORDS = ["legeplads", "yoga", "pilates", "dans", "salsa", "tango", "quiz", "standup", "stand-up", "comedy", "teater", "opera", "ballet", "foredrag", "workshop", "loppemarked", "marked", "udstilling", "brætspil", "gaming", "esport", "vinsmagning", "ølsmagning", "padel", "klatring", "løbetur", "maraton", "meditation", "poesi", "film", "biograf", "karaoke", "techno", "rock", "metal", "hiphop", "rap", "klassisk"];
+const TOPIC_WORDS = ["festival", "legeplads", "yoga", "pilates", "dans", "salsa", "tango", "quiz", "standup", "stand-up", "comedy", "teater", "opera", "ballet", "foredrag", "workshop", "loppemarked", "marked", "udstilling", "brætspil", "gaming", "esport", "vinsmagning", "ølsmagning", "padel", "klatring", "løbetur", "maraton", "meditation", "poesi", "film", "biograf", "karaoke", "techno", "rock", "metal", "hiphop", "rap", "klassisk"];
 export function topicWordsOf(message: string): string[] {
   const low = String(message || "").toLowerCase();
   // "børneteater"/"dukketeater" are theatre: compound heads count for these.
@@ -863,6 +863,7 @@ const TOPIC_SYNONYMS: Record<string, string[]> = {
   film: ["film", "filmaften", "biograf", "cinema", "kino"],
   biograf: ["biograf", "cinema", "kino", "bio"],
   marked: ["marked", "markedet", "loppemarked", "julemarked", "market"],
+  festival: ["festival", "festivalen", "fest-uge", "festuge"],
   udstilling: ["udstilling", "exhibition", "vernissage", "fernisering"],
   "børneteater": ["børneteater", "dukketeater", "børneforestilling", "familieforestilling", "teater for børn", "forestilling for børn"],
 };

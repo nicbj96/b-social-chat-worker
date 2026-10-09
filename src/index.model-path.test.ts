@@ -135,7 +135,8 @@ describe("/chat model path — proposal, grounding, budget", () => {
     const res = await chat(envWith(ai, net), { messages: [{ role: "user", content: "find jazz og rock" }], current_intent: currentIntent });
     const body = await res.json() as any;
     expect(body.event_ids).toEqual([UUID]);
-    expect(net).toHaveBeenCalledTimes(1); // only the first embedding's RPC ran
+    // only the first embedding's RPC ran (catalogue REST top-ups are not embeddings)
+    expect(net.mock.calls.filter((c: any[]) => String(c[0]).includes("/rpc/")).length).toBe(1);
     expect(ai.run).toHaveBeenCalledTimes(3); // 2 model + 1 embedding — never a 3rd model call or 2nd embedding
     expect(body.budget.embedding_calls).toBe(1);
   });
