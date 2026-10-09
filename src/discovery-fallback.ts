@@ -374,7 +374,7 @@ export async function searchEventsRelaxing(
     steps.unshift(...(intent.dateWindow ? [{ filters: { ...tagged, date_from: intent.dateWindow.from, date_to: intent.dateWindow.to }, relaxed: [] as Relaxation[] }] : []), { filters: tagged, relaxed: intent.dateWindow ? ["date"] as Relaxation[] : [] });
   }
   if (intent.dateWindow) steps.push({ filters: base, relaxed: ["date"] });
-  if (hasCategory) {
+  if (hasCategory && false) {
     steps.push({ filters: { city: intent.city, ...(intent.free ? { free: true } : {}), ...(intent.country && !intent.city ? { country: intent.country } : {}) }, relaxed: intent.dateWindow ? ["date", "category"] : ["category"] });
   }
   let last: { results: any[]; error?: string; relaxed: Relaxation[] } = { results: [], relaxed: [] };
@@ -816,7 +816,7 @@ export function clarifyDiscoveryReply(lang: "da" | "en") {
 /** Named music genres and the words that prove a row is that genre. */
 export const GENRES: Record<string, string[]> = {
   jazz: ["jazz"],
-  techno: ["techno", "tekno", "rave", "elektronisk", "electronic", "electronica"],
+  techno: ["techno", "tekno", "rave"],
   elektronisk: ["elektronisk", "electronic", "electronica", "techno", "house", "dj", "rave", "elektro"],
   rock: ["rock"],
   metal: ["metal"],
