@@ -934,7 +934,9 @@ export function honestEmptyReply(intent: DiscoveryIntent, genreIn: string | null
   let when = "";
   const w = intent.dateWindow;
   if (w) {
-    const from = new Date(w.from), to = new Date(Date.parse(w.to) - 1);
+    // R39: a weekend asked on Saturday names the days left, not the Friday that has passed.
+    const nowMs = Date.now(), fromMs = Date.parse(w.from), toMs = Date.parse(w.to);
+    const from = new Date(nowMs > fromMs && nowMs < toMs - 1 ? Math.max(fromMs, nowMs) : fromMs), to = new Date(toMs - 1);
     const fmt = (d: Date) => new Intl.DateTimeFormat(da ? "da-DK" : "en-GB", { timeZone: "Europe/Copenhagen", weekday: "long", day: "numeric", month: "long" }).format(d);
     const a = fmt(from), b = fmt(to);
     when = a === b ? (da ? ` ${a.replace(/^(\p{L}+) /u, "$1 den ")}` : ` on ${a}`) : (da ? ` fra ${a} til ${b}` : ` from ${a} to ${b}`);
