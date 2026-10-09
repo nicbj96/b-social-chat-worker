@@ -2506,9 +2506,19 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
             return true;
           };
           if (gG || twG.length || wantsConcert) {
+            // Semantic rows carry no category/tags: fetch them so the gate can judge.
+            const bare = (groundedToolResults as any[]).filter((g) => g.kind === "event").flatMap((g) => g.rows || []).filter((r: any) => r?.id && r.category === undefined && r.interest_tags === undefined).map((r: any) => String(r.id));
+            if (bare.length && wantsConcert && (aiResponse.tool_calls || []).some((tc: any) => tc?.function?.name === "semantic_search")) {
+              try {
+                const { data } = await createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY).from("events").select("id, category, interest_tags").in("id", bare.slice(0, 40));
+                const byId = new Map(((data || []) as any[]).map((d) => [String(d.id), d]));
+                for (const g of groundedToolResults as any[]) if (g.kind === "event") g.rows = (g.rows || []).map((r: any) => byId.has(String(r.id)) ? { ...r, category: byId.get(String(r.id)).category, interest_tags: byId.get(String(r.id)).interest_tags } : r);
+              } catch { /* gate on what we have */ }
+            }
+            const placeOnly = twG.length > 0 && twG.every((w) => ["café", "bar", "biograf", "museum"].includes(w));
             const keepIds = new Set<string>();
             for (const g of groundedToolResults as any[]) {
-              g.rows = (g.rows || []).filter((r: any) => on(r, g.kind));
+              g.rows = placeOnly && g.kind === "event" ? [] : (g.rows || []).filter((r: any) => on(r, g.kind));
               for (const r of g.rows) if (r?.id) keepIds.add(String(r.id));
             }
             for (let i = groundedToolResults.length - 1; i >= 0; i--) if (!((groundedToolResults[i] as any).rows || []).length) groundedToolResults.splice(i, 1);
