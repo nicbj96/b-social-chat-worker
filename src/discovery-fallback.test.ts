@@ -70,7 +70,7 @@ describe("formatFallbackReply", () => {
 
   it("is honest when a scoped search returns nothing", () => {
     const response = formatFallbackReply(inferDiscoveryIntent("events i Malmö"), [], [], "da");
-    expect(response.reply).toContain("ingen resultater");
+    expect(response.reply).toContain("Jeg fandt ingen events i Malmö");
     expect(response.place_ids).toEqual([]);
     expect(response.event_ids).toEqual([]);
   });
@@ -109,7 +109,7 @@ describe("formatFallbackReply", () => {
       [],
       "en",
     );
-    expect(response.reply).toBe("I found no results in København with the selected filters.");
+    expect(response.reply).toContain("I found no events in København");
   });
 });
 

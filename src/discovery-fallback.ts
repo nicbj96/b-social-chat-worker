@@ -164,7 +164,7 @@ const TOPIC_WORDS = ["legeplads", "yoga", "pilates", "dans", "salsa", "tango", "
 export function topicWordsOf(message: string): string[] {
   const low = String(message || "").toLowerCase();
   // "børneteater"/"dukketeater" are theatre: compound heads count for these.
-  const COMPOUND_OK = new Set(["teater", "foredrag", "workshop", "koncert"]);
+  const COMPOUND_OK = new Set(["teater", "foredrag", "workshop", "koncert", "udstilling"]);
   const hits = TOPIC_WORDS.filter(w => new RegExp(COMPOUND_OK.has(w) ? w : `(?<!\\p{L})${w}`, "u").test(low));
   // "børneteater" is narrower than "teater": comedy clubs tagged teater are not it.
   if (/(?<!\p{L})markede?r?(?!\p{L})/u.test(low) && !hits.includes("marked")) hits.push("marked");
@@ -607,7 +607,7 @@ export function formatFallbackReply(
   return {
     reply: lines.length > 0
       ? `${missingIntro ? missingIntro : relaxed.length > 0 && selectedEvents.length > 0 ? relaxedIntro : substituting ? `${copy.placesInstead}${intent.city ? ` ${copy.cityPrefix} ${intent.city}` : ""}:` : copy.intro}\n${lines.join("\n")}`
-      : `${copy.noResults}${intent.city ? ` ${copy.cityPrefix} ${intent.city}` : ""} ${copy.selectedFilters}`,
+      : honestEmptyReply(intent, null, language === "en" ? "en" : "da"),
     tool_calls_made: ["direct_discovery_fallback"],
     place_ids: selectedPlaces.map((place) => String(place.id)).slice(0, intent.limit),
     event_ids: selectedEvents.map((event) => String(event.id)),
