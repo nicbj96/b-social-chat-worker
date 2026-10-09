@@ -48,6 +48,7 @@ import {
 } from "./chat-provider";
 import { rateLimitActorKey } from "./ratelimit";
 import { resolveChatTier } from "./plus-tier";
+import { detailOrdinal, listedTitles, pickTitle, renderEventDetail, renderPlaceDetail } from "./detail-followup";
 import { chainGenre, rowIsGenre, topicWordHit, nonGenreTopics, GENRES, honestEmptyReply, topicTagList, placeNameNeedles, placeTopicsOf } from "./discovery-fallback";
 import { resolveTurnDiscovery, looksLikeEventListing, looksLikeUngroundedFact, clarifyDiscoveryReply } from "./discovery-fallback";
 import { aiBreakerIsOpen, searchEventsRelaxing, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
@@ -1769,6 +1770,33 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
       return await catalogueFallbackForTurn(env, userMessages, ctx, { reason: "provider_error" });
     }
 
+    // R29: "fortæl mig mere om den første" answers about THAT item from the
+    // catalogue row named in the previous reply (deterministic, no model).
+    {
+      const ord = detailOrdinal(latestUserMessage(userMessages));
+      const prevReply = [...userMessages].reverse().find((m) => m.role === "assistant")?.content;
+      if (ord !== null && prevReply) {
+        const title = pickTitle(listedTitles(String(prevReply)), ord);
+        const lang = inferResponseLanguage(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")).join(" ")) === "en" ? "en" : "da";
+        if (title && title.length >= 3) {
+          try {
+            const sb = createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY);
+            const pat = `%${title.replace(/[%_,()]/g, " ").trim()}%`;
+            const { data: evs } = await sb.from("events").select("id, title, description, location, date, price, price_currency, url").ilike("title", pat).gte("date", new Date(Date.now() - 6 * 3600 * 1000).toISOString()).order("date", { ascending: true }).limit(1);
+            if (evs && evs.length) {
+              console.log(JSON.stringify({ event: "detail_followup", kind: "event" }));
+              return jsonResponse({ reply: renderEventDetail(evs[0], lang), tool_calls_made: ["detail_followup"], event_ids: [String(evs[0].id)], place_ids: [], suggested_tag_slugs: [], grounding: "verified" });
+            }
+            const { data: pls } = await sb.from("places").select("id, name, description, city, nearest_city").ilike("name", pat).limit(1);
+            if (pls && pls.length) {
+              console.log(JSON.stringify({ event: "detail_followup", kind: "place" }));
+              return jsonResponse({ reply: renderPlaceDetail(pls[0], lang), tool_calls_made: ["detail_followup"], event_ids: [], place_ids: [String(pls[0].id)], suggested_tag_slugs: [], grounding: "verified" });
+            }
+          } catch { /* fall through to the normal path */ }
+        }
+      }
+    }
+
     // R26: "hvad sker der i morgen/i weekenden" with no city, topic or genre
     // is a pure date question. The model path timed out on it and the
     // semantic path surfaced Stanford rows; answer straight from the Danish
@@ -1777,7 +1805,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
       const td = turnDiscovery(userMessages, ctx);
       const latestQ = latestUserMessage(userMessages);
       const it = td.intent;
-      if (td.seeking && !td.followUp && !it.city && it.dateWindow && !it.eventCategory && !it.queryTag && !it.placeCategory
+      if (td.seeking && !td.followUp && it.dateWindow && !it.eventCategory && !it.queryTag && !it.placeCategory
         && nonGenreTopics(it.topicWords).length === 0 && !chainGenre([latestQ]) && inferResponseLanguage(latestQ) !== "en") {
         console.log(JSON.stringify({ event: "date_only_direct", label: it.dateWindow.label }));
         return await directDiscoveryFallback(env, userMessages, ctx);
@@ -2584,6 +2612,11 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
         // ("legepladser i Odense" → three invented playgrounds).
         const listsRows = /^[ \t]*(?:[*•\-]|\d+\.)[ \t]+\S/m.test(String(grounded.reply || ""));
         if (td.seeking || listsRows) grounded = { ...grounded, reply: honestEmptyReply(td.intent, chainGenre(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? ""))), replyLang === "en" ? "en" : "da"), grounding: "verified" } as any;
+      }
+
+      // R29: places carry no price; "gratis" cannot be confirmed for them.
+      if (collectedEventIds.length === 0 && collectedPlaceIds.length > 0 && turnDiscovery(userMessages, ctx).intent.free) {
+        grounded = { ...grounded, reply: `${replyLang === "en" ? "The catalogue has no admission prices for places, so I can't confirm which are free. Places matching your search:" : "Kataloget har ikke entrépriser for steder, så jeg kan ikke bekræfte, hvilke der er gratis. Steder der passer på din søgning:"}\n${String(grounded.reply || "").replace(/^[^\n•]*:\s*\n/, "")}` };
       }
 
       // M41 resource cap: the response payload is byte-capped, and any cut is

@@ -601,6 +601,7 @@ export function formatFallbackReply(
   const missing = selectedEvents.length > 0 && intent.topicWords?.length
     && !selectedEvents.some((e: any) => intent.topicWords!.some(w => topicWordHit(e, w)))
     ? intent.topicWords.join(" ") : "";
+  if (missing) return { reply: honestEmptyReply(intent, null, language === "en" ? "en" : "da"), tool_calls_made: ["direct_discovery_fallback"], place_ids: [], event_ids: [], suggested_tag_slugs: [], sources: [] } as any;
   const missingIntro = missing
     ? (language === "en" ? `I found nothing matching "${missing}". Other events${intent.city ? ` in ${intent.city}` : ""}${intent.dateWindow && !relaxed.includes("date") ? ` (${intent.dateWindow.label})` : ""}:` : `Jeg fandt ikke noget med "${missing}". Andre events${intent.city ? ` i ${intent.city}` : ""}${intent.dateWindow && !relaxed.includes("date") ? ` (${intent.dateWindow.label})` : ""}:`)
     : "";
@@ -838,6 +839,7 @@ export function namedGenre(message: string): string | null {
 export function rowIsGenre(row: Record<string, any>, genre: string): boolean {
   const tags = Array.isArray(row.interest_tags) ? row.interest_tags.join(" ") : "";
   const hay = ` ${String(row.title ?? "")} ${String(row.description ?? "")} ${tags} `.toLowerCase();
+  if (/(?<!\p{L})musical(?!\p{L})/iu.test(String(row.title ?? ""))) return false;
   // Danish compounds ("jazzkoncert", "rockmusik", "jazzmusikkens") keep the
   // genre as a prefix; short words (pop, rap, dj, house) need a word end.
   return (GENRES[genre] ?? [genre]).some(w => new RegExp(`(?<![\\p{L}])${w.replace(/[-\s]/g, "[-\\s]?")}${w.length >= 4 && w !== "house" ? "" : "(?![\\p{L}])"}`, "u").test(hay));
@@ -866,6 +868,10 @@ const TOPIC_SYNONYMS: Record<string, string[]> = {
 };
 /** A row mentions the topic word (or a close synonym). */
 export function topicWordHit(row: Record<string, any>, word: string): boolean {
+  if (word === "film" && (row.title !== undefined)) {
+    const strict = `${row.title ?? ""} ${Array.isArray(row.interest_tags) ? row.interest_tags.join(" ") : ""} ${row.category ?? ""}`.toLowerCase();
+    return /(?<!\p{L})(?:film\p{L}*|cinema|kino|biograf\p{L}*|screening|filmvisning)/u.test(strict);
+  }
   const tg = (v: any) => Array.isArray(v) ? v.join(" ") : String(v ?? "");
   // 5,687 places carry the blanket ingest set restaurant+mad+café+bar; on
   // those rows "café"/"bar" says nothing, so only name/description count.
@@ -898,6 +904,7 @@ export function honestEmptyReply(intent: DiscoveryIntent, genre: string | null, 
     ? (da ? `${genre}-events` : `${genre} events`)
     : topics.length ? (intent.kind === "places" ? (da ? `steder med ${topics[0]}` : `${topics[0]} places`) : da ? `${topics[0]}-events` : `${topics[0]} events`)
     : intent.queryTag && intent.queryTag !== "musik" ? (da ? `${human(intent.queryTag)}-events` : `${human(intent.queryTag)} events`)
+    : intent.eventCategory === "musik" ? (da ? "koncerter" : "concerts")
     : intent.kind === "places" ? (da ? "steder" : "places")
     : "events";
   const free = intent.free ? (da ? "gratis " : "free ") : "";
