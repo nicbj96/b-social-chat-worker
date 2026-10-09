@@ -471,3 +471,10 @@ describe("r31", () => {
     expect(normalizeBullets("Caféen ligger på adressen [latitude: 55.67, longitude: 12.57] i København.")).toBe("Caféen ligger i København.");
   });
 });
+
+describe("r32", () => {
+  it("festival is a topic: concerts are not festivals", () => {
+    expect(topicWordHit({ title: "Deep Purple", interest_tags: ["musik", "koncert"] }, "festival")).toBe(false);
+    expect(topicWordHit({ title: "Aarhus Festuge 2027" }, "festival")).toBe(true);
+  });
+});
