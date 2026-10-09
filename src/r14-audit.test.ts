@@ -445,3 +445,9 @@ describe("r30b", () => {
     expect(ids).toEqual(["a", "b"]);
   });
 });
+describe("r30c", () => {
+  it("a generic title inside another bullet is not a card", () => {
+    const ids = idsNamedInReply([{ id: "a", title: "Mosaik Workshop (begyndere)" }, { id: "g", title: "Workshop" }, { id: "j", title: "BØLLE" }], "• **Mosaik Workshop (begyndere/letøvede)** på Glad Sol\n• BØLLE - koncert på Drop Inn");
+    expect(ids).toEqual(["a", "j"]);
+  });
+});

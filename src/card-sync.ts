@@ -50,6 +50,8 @@ export function syncBulletsToItems(reply: string, items: { title?: string; name?
 /** Ids of the items the reply names, with the same matching the bullets use. */
 export function idsNamedInReply(items: { id?: string; title?: string; name?: string }[], reply: string): string[] {
   const text = fold(reply);
+  const bullets = String(reply || "").split("\n").filter((l) => BULLET_RE.test(l))
+    .map((l) => fold(l.replace(/^[ \t]*(?:[•*\-]|\d+\.)[ \t]+/, "")).replace(/^(?:teaterforestilling|koncert|event|forestilling)\s+/, ""));
   const seen = new Set<string>();
   const all: string[] = [];
   const named: string[] = [];
@@ -59,7 +61,11 @@ export function idsNamedInReply(items: { id?: string; title?: string; name?: str
     const t = String(it.title ?? it.name ?? "");
     if (t.trim().length < 3) continue;
     const full = fold(t), core = titleCore(t);
-    if (text.includes(core) || text.includes(full) || (full.length > 12 && text.includes(full.slice(0, 18)))) named.push(String(it.id));
+    // With bullets, an item is a card only when a bullet STARTS with its
+    // title: a generic title ("Workshop") inside "Mosaik Workshop" is not it.
+    if (bullets.length) {
+      if (bullets.some((b) => b.startsWith(core) || b.startsWith(full) || (core.length >= 10 && b.includes(core)))) named.push(String(it.id));
+    } else if (text.includes(core) || text.includes(full) || (full.length > 12 && text.includes(full.slice(0, 18)))) named.push(String(it.id));
   }
   return named.length ? named : all;
 }
