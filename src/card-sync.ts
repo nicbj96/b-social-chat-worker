@@ -30,7 +30,17 @@ export function syncBulletsToItems(reply: string, items: { title?: string; name?
     .filter((t) => t.trim().length >= 3)
     .map((t) => ({ full: fold(t), core: titleCore(t) }));
   if (!labels.length) return reply;
-  const lines = String(reply || "").split("\n");
+  let lines = String(reply || "").split("\n");
+  // R33: an item named in a prose line before the list ("Late Mic finder sted …")
+  // becomes a bullet, so text and cards agree.
+  {
+    const firstBullet = lines.findIndex((l) => BULLET_RE.test(l));
+    if (firstBullet > 0) lines = lines.map((l, i) => {
+      if (i >= firstBullet || BULLET_RE.test(l)) return l;
+      const f = fold(l);
+      return labels.some((lb) => lb.core.length >= 4 && f.startsWith(lb.core)) ? `• ${l.trim()}` : l;
+    });
+  }
   const bulletIdx = lines.map((l, i) => (BULLET_RE.test(l) ? i : -1)).filter((i) => i >= 0);
   if (!bulletIdx.length) return reply;
   const named = (line: string) => {
@@ -43,8 +53,30 @@ export function syncBulletsToItems(reply: string, items: { title?: string; name?
   const drop = new Set(bulletIdx.filter((i) => !keep.includes(i)));
   let out = lines.filter((_, i) => !drop.has(i)).join("\n");
   // Blanket claims about the whole list are not row facts.
-  out = out.replace(/(^|\n)[ \t]*(?:Begge|Alle disse|Alle|Both|All of these|All)\s+(?:events?|arrangementer|aktiviteter|steder|places)?[^\n.?!]*(?:gratis|free|åbne|open|velegnede|suitable)[^\n.?!]*[.!]\s*/giu, "$1");
+  out = out.replace(/(^|\n)[ \t]*(?:Begge|Alle disse|Alle|Both|All of these|All)\s+(?:events?|arrangementer|aktiviteter|steder|places|shows?|koncerter|forestillinger)?[^\n.?!]*(?:gratis|free|åbne|open|velegnede|suitable|festival|en del af|part of)[^\n.?!]*[.!]\s*/giu, "$1");
+  // A line that promises something after a colon and then delivers nothing
+  // ("Du kan købe billetter på følgende links:") is removed.
+  out = out.split("\n").filter((l, i, arr) => {
+    if (!/:\s*$/.test(l) || BULLET_RE.test(l)) return true;
+    const next = arr.slice(i + 1).find((x) => x.trim());
+    return !!next && BULLET_RE.test(next);
+  }).join("\n");
   return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** R33: place bullets carry the catalogue name only. Places have no reliable
+ * description in the catalogue, so model-written colour ("hyggelig café",
+ * "lækre retter") is unverifiable; keep the name, drop the rest. */
+export function placeBulletsNameOnly(reply: string, places: { name?: string }[]): string {
+  const names = places.map((p) => String(p?.name ?? "")).filter((n) => n.trim().length >= 2);
+  if (!names.length) return reply;
+  return String(reply || "").split("\n").map((l) => {
+    if (!BULLET_RE.test(l)) return l;
+    const body = l.replace(/^[ \t]*(?:[•*\-]|\d+\.)[ \t]+/, "").replace(/\*\*/g, "");
+    const f = fold(body);
+    const hit = names.filter((n) => f.startsWith(fold(n))).sort((a, b) => b.length - a.length)[0];
+    return hit ? `• ${hit}` : l;
+  }).join("\n");
 }
 
 /** Ids of the items the reply names, with the same matching the bullets use.

@@ -102,9 +102,9 @@ export function renderPlaceDetail(p: Record<string, any>, lang: "da" | "en"): st
   const da = lang !== "en";
   const lines = [`${p.name}`];
   const city = p.city || p.nearest_city;
-  if (city) lines.push(`${da ? "By" : "City"}: ${city}`);
+  if (city) lines.push(`${da ? "By" : "City"}: ${da ? String(city).replace(/^Copenhagen$/i, "København") : city}`);
   const desc = shortText(p.description);
-  if (desc && !/^(restaurant|café|cafe|bar) in /i.test(desc)) lines.push("", desc);
+  if (desc && !/^(restaurant|café|cafe|bar) in /i.test(desc) && !new RegExp(`^${String(p.name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*[—-]`, "i").test(desc)) lines.push("", desc);
   lines.push("", da ? "Kataloget har ikke adresse eller åbningstider for dette sted. Se stedet på kortet for placering." : "The catalogue has no address or opening hours for this place. See it on the map for its location.");
   return lines.join("\n");
 }
