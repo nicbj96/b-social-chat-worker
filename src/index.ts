@@ -2115,7 +2115,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                       (out.events || []).forEach((e: any) => {
                         if (!e?.id) return;
                         collectedEventIds.push(e.id);
-                        collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date });
+                        collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date_raw ?? e.date });
                       });
                       if ((out.events || []).length > 0 && !out.events_error) {
                         groundedToolResults.push({ kind: "event", retrieved_at: new Date().toISOString(), rows: out.events });
@@ -2193,7 +2193,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                     result.results.forEach((e: any) => {
                       if (!e?.id) return;
                       collectedEventIds.push(e.id);
-                      collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date });
+                      collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date_raw ?? e.date });
                     });
                     if (result.results.length > 0) groundedToolResults.push({ kind: "event", retrieved_at: new Date().toISOString(), rows: result.results });
                   }
