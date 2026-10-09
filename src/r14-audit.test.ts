@@ -549,3 +549,15 @@ describe("r37", () => {
     expect(syncBulletsToItems("Her:\n- **Akrobat**: x", [{ title: "Akrobat" }])).toBe("Her:\n• Akrobat: x");
   });
 });
+import { deadlineBullets } from "./card-sync";
+describe("r38", () => {
+  it("deadline fallback uses bullets", () => {
+    expect(deadlineBullets("Tidsgrænsen udløb.\n\nTalentshow — 135 DKK\nTidspunkt: søn. 11. okt., 14.15")).toBe("Tidsgrænsen udløb.\n\n• Talentshow — søn. 11. okt., 14.15 — 135 DKK");
+  });
+});
+describe("r38b", () => {
+  it("bullets with an age prefix sort by their written date", () => {
+    const r = sortBulletRunsByDate("• (5-6 år) Butter - lørdag den 3. april 2027\n• (7-9 år) Drøm - lørdag den 16. januar 2027\n• Frøken Larsen - lørdag den 24. oktober 2026", [{ title: "Frøken Larsens Store Kærlighed", date: "2026-10-24T09:00:00Z" }, { title: "Noget andet", date: "2026-11-01T09:00:00Z" }]);
+    expect(r.split("\n").map((l) => l.slice(0, 12))).toEqual(["• Frøken Lar", "• (7-9 år) D", "• (5-6 år) B"]);
+  });
+});
