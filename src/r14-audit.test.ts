@@ -454,5 +454,6 @@ describe("r30c", () => {
 describe("r30d", () => {
   it("one card per title", () => {
     expect(idsNamedInReply([{ id: "a", title: "Mosaik Workshop" }, { id: "b", title: "Mosaik Workshop" }, { id: "c", title: "BØLLE" }], "• Mosaik Workshop på X\n• BØLLE på Y")).toEqual(["a", "c"]);
+    expect(idsNamedInReply([{ id: "n1", title: "NOLA JAZZ JAM" }, { id: "b", title: "BØLLE" }, { id: "n2", title: "NOLA JAZZ JAM" }], "• BØLLE x\n• NOLA JAZZ JAM 13. okt\n• NOLA JAZZ JAM 10. nov")).toEqual(["b", "n1", "n2"]);
   });
 });

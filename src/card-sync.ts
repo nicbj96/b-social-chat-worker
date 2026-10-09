@@ -47,30 +47,33 @@ export function syncBulletsToItems(reply: string, items: { title?: string; name?
   return out.replace(/\n{3,}/g, "\n\n").trim();
 }
 
-/** Ids of the items the reply names, with the same matching the bullets use. */
+/** Ids of the items the reply names, with the same matching the bullets use.
+ * With bullets: each bullet gets at most one card (the first unused item whose
+ * title the bullet starts with), so N bullets give at most N cards — two dates
+ * of NOLA JAZZ JAM are two bullets and two cards, three Mosaik rows behind one
+ * bullet are one card. Without bullets: every item the prose names. */
 export function idsNamedInReply(items: { id?: string; title?: string; name?: string }[], reply: string): string[] {
-  const text = fold(reply);
-  const bullets = String(reply || "").split("\n").filter((l) => BULLET_RE.test(l))
-    .map((l) => fold(l.replace(/^[ \t]*(?:[•*\-]|\d+\.)[ \t]+/, "")).replace(/^(?:teaterforestilling|koncert|event|forestilling)\s+/, ""));
   const seen = new Set<string>();
-  const all: string[] = [];
-  const named: string[] = [];
+  const uniq: { id: string; full: string; core: string }[] = [];
   for (const it of items) {
     if (!it?.id || seen.has(String(it.id))) continue;
-    seen.add(String(it.id)); all.push(String(it.id));
+    seen.add(String(it.id));
     const t = String(it.title ?? it.name ?? "");
-    if (t.trim().length < 3) continue;
-    const full = fold(t), core = titleCore(t);
-    // With bullets, an item is a card only when a bullet STARTS with its
-    // title: a generic title ("Workshop") inside "Mosaik Workshop" is not it.
-    if (bullets.length) {
-      if (bullets.some((b) => b.startsWith(core) || b.startsWith(full) || (core.length >= 10 && b.includes(core)))) named.push(String(it.id));
-    } else if (text.includes(core) || text.includes(full) || (full.length > 12 && text.includes(full.slice(0, 18)))) named.push(String(it.id));
+    uniq.push({ id: String(it.id), full: fold(t), core: titleCore(t) });
   }
-  // One card per listed title: a run of dates or a duplicate catalogue row
-  // ("Mosaik Workshop" ×3, "Empire Bio" ×2) is still one bullet.
-  const byId = new Map(items.filter((it) => it?.id).map((it) => [String(it.id), fold(String(it.title ?? it.name ?? ""))]));
-  const titles = new Set<string>();
-  const uniq = (ids: string[]) => ids.filter((id) => { const t = byId.get(id) || id; if (titles.has(t)) return false; titles.add(t); return true; });
-  return named.length ? uniq(named) : all;
+  const all = uniq.map((u) => u.id);
+  const bullets = String(reply || "").split("\n").filter((l) => BULLET_RE.test(l))
+    .map((l) => fold(l.replace(/^[ \t]*(?:[•*\-]|\d+\.)[ \t]+/, "")).replace(/^(?:teaterforestilling|koncert|event|forestilling)\s+/, ""));
+  if (bullets.length) {
+    const used = new Set<string>();
+    const out: string[] = [];
+    for (const b of bullets) {
+      const hit = uniq.find((u) => !used.has(u.id) && u.core.length >= 2 && (b.startsWith(u.core) || b.startsWith(u.full) || (u.core.length >= 10 && b.includes(u.core))));
+      if (hit) { used.add(hit.id); out.push(hit.id); }
+    }
+    return out.length ? out : all;
+  }
+  const text = fold(reply);
+  const named = uniq.filter((u) => u.core.length >= 3 && (text.includes(u.core) || text.includes(u.full) || (u.full.length > 12 && text.includes(u.full.slice(0, 18))))).map((u) => u.id);
+  return named.length ? named : all;
 }
