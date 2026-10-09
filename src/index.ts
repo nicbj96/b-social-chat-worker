@@ -48,7 +48,7 @@ import {
 } from "./chat-provider";
 import { rateLimitActorKey } from "./ratelimit";
 import { resolveChatTier } from "./plus-tier";
-import { syncBulletsToItems, idsNamedInReply } from "./card-sync";
+import { syncBulletsToItems, idsNamedInReply, placeBulletsNameOnly } from "./card-sync";
 import { titleCandidates, detailOrdinal, listedTitles, pickTitle, renderEventDetail, renderPlaceDetail } from "./detail-followup";
 import { chainGenre, rowIsGenre, topicWordHit, nonGenreTopics, GENRES, honestEmptyReply, topicTagList, placeNameNeedles, placeTopicsOf } from "./discovery-fallback";
 import { resolveTurnDiscovery, looksLikeEventListing, looksLikeUngroundedFact, clarifyDiscoveryReply } from "./discovery-fallback";
@@ -2640,6 +2640,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
       // R30: bullets and cards are the same set; no blanket claims over the list.
       if (!deadlineHitMidTools && (collectedEvents.length || collectedPlaces.length)) {
         grounded = { ...grounded, reply: syncBulletsToItems(String(grounded.reply || ""), [...collectedEvents, ...collectedPlaces] as any[]) };
+        if (collectedPlaces.length) grounded = { ...grounded, reply: placeBulletsNameOnly(String(grounded.reply || ""), collectedPlaces as any[]) };
       }
 
       // M41 resource cap: the response payload is byte-capped, and any cut is

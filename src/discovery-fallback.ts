@@ -837,6 +837,10 @@ export function namedGenre(message: string): string | null {
   return null;
 }
 export function rowIsGenre(row: Record<string, any>, genre: string): boolean {
+  // R33: "REGGAETON x … brasiliansk funk, pop og latin" is not electronic music
+  // just because a DJ plays it.
+  if ((genre === "elektronisk" || genre === "techno") && /(?<!\p{L})(reggaeton|latin|salsa|bachata|funk|hip\s*-?hop|r&b|rock|pop)(?!\p{L})/iu.test(`${row.title ?? ""} ${row.description ?? ""}`)
+    && !/(?<!\p{L})(techno|elektronisk|electronic|house|electronica)(?!\p{L})/iu.test(`${row.title ?? ""} ${row.description ?? ""}`)) return false;
   const tags = Array.isArray(row.interest_tags) ? row.interest_tags.join(" ") : "";
   const hay = ` ${String(row.title ?? "")} ${String(row.description ?? "")} ${tags} `.toLowerCase();
   if (/(?<!\p{L})musical(?!\p{L})/iu.test(String(row.title ?? ""))) return false;

@@ -478,3 +478,18 @@ describe("r32", () => {
     expect(topicWordHit({ title: "Aarhus Festuge 2027" }, "festival")).toBe(true);
   });
 });
+
+import { placeBulletsNameOnly } from "./card-sync";
+describe("r33", () => {
+  it("reggaeton is not electronic", () => { expect(rowIsGenre({ title: "REGGAETON x", description: "DJ spiller brasiliansk funk, pop og latin hits" }, "elektronisk")).toBe(false); });
+  it("place bullets keep the catalogue name only", () => {
+    expect(placeBulletsNameOnly("Her:\n• **Era Ora**: lækre retter\n• Café Sonja - hyggelig", [{ name: "Era Ora" }, { name: "Café Sonja" }])).toBe("Her:\n• Era Ora\n• Café Sonja");
+  });
+  it("prose item becomes a bullet; empty-colon line and festival claim go", () => {
+    const r = syncBulletsToItems("Late Mic finder sted i Citizen kl. 23.00.\n\nAlle shows er en del af UP Comedy Festival 2026 og koster 135 kr.\n• Sebastian Dorset: Dyrenes konge — 135 DKK\n\nDu kan købe billetter på følgende links:\n\nVil du have mere?", [{ title: "Late Mic" }, { title: "Sebastian Dorset: Dyrenes konge" }]);
+    expect(r).toContain("• Late Mic");
+    expect(r).not.toContain("UP Comedy");
+    expect(r).not.toContain("følgende links");
+    expect(r).toContain("Vil du have mere?");
+  });
+});
