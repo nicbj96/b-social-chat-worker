@@ -577,3 +577,9 @@ describe("r39", () => {
     expect(syncBulletsToItems("Der er koncerter i aften! 🎸 Her:\n• Akrobat kl. 18", [{ title: "Akrobat" }])).toBe("Der er koncerter i aften! Her:\n• Akrobat kl. 18");
   });
 });
+describe("r40", () => {
+  it("fallback intro names city, or says whole country", () => {
+    const ev = [{ id: "e1", title: "Koncert", location: "Augustenborg" }];
+    expect(formatFallbackReply({ kind: "events", limit: 4 } as any, [], ev as any, "da").reply).toMatch(/^Her er events fra hele landet:/);
+  });
+});

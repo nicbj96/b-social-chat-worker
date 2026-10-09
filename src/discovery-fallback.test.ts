@@ -389,7 +389,7 @@ describe("a substitution is labelled as one", () => {
       { kind: "events", city: "Aarhus", limit: 4 },
       [], [{ id: "e1", title: "Koncert", location: "Aarhus" }], "da",
     );
-    expect(r.reply).toMatch(/^Her er resultater/);
+    expect(r.reply).toMatch(/^Her er events i Aarhus:/);
   });
 
   it("does not label a places question as a substitution", () => {
