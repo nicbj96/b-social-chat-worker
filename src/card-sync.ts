@@ -24,7 +24,7 @@ function titleCore(title: string): string {
 
 const BULLET_RE = /^[ \t]*(?:[•*\-]|\d+\.)[ \t]+\S/;
 
-export function syncBulletsToItems(reply: string, items: { title?: string; name?: string }[]): string {
+export function syncBulletsToItems(reply: string, items: { title?: string; name?: string; date?: string; date_raw?: string }[]): string {
   const labels = items
     .map((it) => String(it?.title ?? it?.name ?? ""))
     .filter((t) => t.trim().length >= 3)
@@ -83,7 +83,42 @@ export function syncBulletsToItems(reply: string, items: { title?: string; name?
     const next = arr.slice(i + 1).find((x) => x.trim());
     return !!next && BULLET_RE.test(next);
   }).join("\n");
+  out = sortBulletRunsByDate(out, items);
+  // R35: chatty openers ("Hej! Her er nogle fede …") are out of the house style.
+  out = out.replace(/^(?:Hej|Hey|Hi|Hello)[!,.]?\s+/i, "").replace(/^\p{Ll}/u, (c) => c.toUpperCase());
   return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** R35: consecutive bullets that each name a dated item are put in date order. */
+export function sortBulletRunsByDate(reply: string, items: { title?: string; name?: string; date?: string; date_raw?: string }[]): string {
+  const dated = items.map((it) => ({ core: titleCore(String(it?.title ?? it?.name ?? "")), full: fold(String(it?.title ?? it?.name ?? "")), t: Date.parse(String(it?.date_raw ?? it?.date ?? "")) }))
+    .filter((d) => d.core.length >= 3 && Number.isFinite(d.t));
+  if (dated.length < 2) return reply;
+  const lines = reply.split("\n");
+  const timeOf = (l: string) => {
+    const f = fold(l.replace(/^[ \t]*(?:[•*\-]|\d+\.)[ \t]+/, ""));
+    const hits = dated.filter((d) => f.startsWith(d.full) || f.startsWith(d.core));
+    if (!hits.length) return null;
+    // Same title on several dates: use the date written in the bullet when it matches one.
+    if (hits.length > 1) {
+      const m = f.match(/(\d{1,2})\.\s*(?:okt|oktober|nov|november|dec|december|sep|september|jan|januar|feb|februar|mar|marts|apr|april|maj|jun|juni|jul|juli|aug|august)/);
+      if (m) { const day = Number(m[1]); const h = hits.find((x) => new Date(x.t).getUTCDate() === day || new Date(x.t + 3 * 3600e3).getUTCDate() === day); if (h) return h.t; }
+      return null;
+    }
+    return hits[0].t;
+  };
+  let i = 0;
+  while (i < lines.length) {
+    if (!BULLET_RE.test(lines[i])) { i++; continue; }
+    let j = i; while (j < lines.length && BULLET_RE.test(lines[j])) j++;
+    const run = lines.slice(i, j).map((l, k) => ({ l, k, t: timeOf(l) }));
+    if (run.length > 1 && run.every((r) => r.t !== null)) {
+      run.sort((a, b) => (a.t! - b.t!) || (a.k - b.k));
+      for (let k = 0; k < run.length; k++) lines[i + k] = run[k].l;
+    }
+    i = j;
+  }
+  return lines.join("\n");
 }
 
 /** R33: place bullets carry the catalogue name only. Places have no reliable

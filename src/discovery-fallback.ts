@@ -898,6 +898,15 @@ export function nonGenreTopics(words?: string[]): string[] {
   return (words ?? []).filter((w) => !genreWords.has(w));
 }
 
+// R35: natural Danish nouns instead of "legeplads-events"/"udstilling-events".
+const DA_TOPIC_NOUN: Record<string, string> = {
+  legeplads: "legepladser", legepladser: "legepladser", udstilling: "udstillinger", udstillinger: "udstillinger",
+  marked: "markeder", markeder: "markeder", loppemarked: "loppemarkeder", foredrag: "foredrag", workshop: "workshops",
+  festival: "festivaler", film: "filmvisninger", teater: "teaterforestillinger", dans: "dansearrangementer",
+  "stand-up": "stand-up-shows", comedy: "comedy-shows", klassisk: "klassiske koncerter", museum: "museer",
+  cafe: "caféer", café: "caféer", bar: "barer", biograf: "biografer", restaurant: "restauranter",
+};
+
 /** Deterministic "nothing found" sentence: the date label comes from the window itself. */
 export function honestEmptyReply(intent: DiscoveryIntent, genreIn: string | null, lang: "da" | "en"): string {
   const da = lang !== "en";
@@ -908,9 +917,9 @@ export function honestEmptyReply(intent: DiscoveryIntent, genreIn: string | null
   const what = intent.kind === "places" && !genre
     ? (topics.length ? (da ? `steder med ${topics[0]}` : `${topics[0]} places`) : intent.queryTag ? (da ? `steder med ${human(intent.queryTag)}` : `${human(intent.queryTag)} places`) : da ? "steder" : "places")
     : genre
-    ? (da ? `${genre}-events` : `${genre} events`)
-    : topics.length ? (intent.kind === "places" ? (da ? `steder med ${topics[0]}` : `${topics[0]} places`) : da ? `${topics[0]}-events` : `${topics[0]} events`)
-    : intent.queryTag && intent.queryTag !== "musik" ? (da ? `${human(intent.queryTag)}-events` : `${human(intent.queryTag)} events`)
+    ? (da ? (DA_TOPIC_NOUN[genre] ?? `${genre}-events`) : `${genre} events`)
+    : topics.length ? (intent.kind === "places" ? (da ? `steder med ${topics[0]}` : `${topics[0]} places`) : da ? (DA_TOPIC_NOUN[topics[0]] ?? `${topics[0]}-events`) : `${topics[0]} events`)
+    : intent.queryTag && intent.queryTag !== "musik" ? (da ? (DA_TOPIC_NOUN[intent.queryTag] ?? `${human(intent.queryTag)}-events`) : `${human(intent.queryTag)} events`)
     : intent.eventCategory === "musik" ? (da ? "koncerter" : "concerts")
     : intent.kind === "places" ? (da ? "steder" : "places")
     : "events";
