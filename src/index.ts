@@ -1758,6 +1758,21 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
       return await catalogueFallbackForTurn(env, userMessages, ctx, { reason: "provider_error" });
     }
 
+    // R26: "hvad sker der i morgen/i weekenden" with no city, topic or genre
+    // is a pure date question. The model path timed out on it and the
+    // semantic path surfaced Stanford rows; answer straight from the Danish
+    // catalogue instead (deterministic, local time, DK only).
+    {
+      const td = turnDiscovery(userMessages, ctx);
+      const latestQ = latestUserMessage(userMessages);
+      const it = td.intent;
+      if (td.seeking && !td.followUp && !it.city && it.dateWindow && !it.eventCategory && !it.queryTag && !it.placeCategory
+        && nonGenreTopics(it.topicWords).length === 0 && !chainGenre([latestQ]) && inferResponseLanguage(latestQ) !== "en") {
+        console.log(JSON.stringify({ event: "date_only_direct", label: it.dateWindow.label }));
+        return await directDiscoveryFallback(env, userMessages, ctx);
+      }
+    }
+
     // Global daily neuron ceiling (kill switch): skip every model call and
     // answer from the catalogue, declared as provider_429. Fail-open.
     const ceiling = await aiCeilingReached(env);
