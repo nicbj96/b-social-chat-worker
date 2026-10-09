@@ -19,6 +19,8 @@ export type DiscoveryIntent = {
   topicWords?: string[];
   /** Reader asked for free things only ("gratis", "free"). */
   free?: boolean;
+  /** R36: genre named in the question; used only to word an empty answer. */
+  namedGenre?: string | null;
   limit: number;
 };
 
@@ -748,6 +750,7 @@ const FOLLOW_UP_RE = /^\s*(?:og|and|men|but)?\s*(?:hvad|what)\s+(?:så\s+)?(?:me
 export function resolveTurnDiscovery(userTexts: string[], contextCity?: string, now: Date = new Date()): { seeking: boolean; followUp: boolean; intent: DiscoveryIntent } {
   const latest = userTexts[userTexts.length - 1] ?? "";
   const own = inferDiscoveryIntent(latest, contextCity, now);
+  own.namedGenre = namedGenre(latest);
   if (FREE_RE.test(latest)) own.free = true;
   if (isDiscoverySeekingMessage(latest)) return { seeking: true, followUp: false, intent: own };
   const short = latest.trim().length <= 80;
@@ -900,6 +903,8 @@ export function nonGenreTopics(words?: string[]): string[] {
 
 // R35: natural Danish nouns instead of "legeplads-events"/"udstilling-events".
 const DA_TOPIC_NOUN: Record<string, string> = {
+  elektronisk: "arrangementer med elektronisk musik", techno: "technoarrangementer", jazz: "jazzkoncerter", rock: "rockkoncerter", hiphop: "hiphopkoncerter", metal: "metalkoncerter",
+  yoga: "yogahold", meditation: "meditationsarrangementer", børneteater: "børneteaterforestillinger", pilates: "pilateshold", quiz: "quizaftener", opera: "operaforestillinger", ballet: "balletforestillinger",
   legeplads: "legepladser", legepladser: "legepladser", udstilling: "udstillinger", udstillinger: "udstillinger",
   marked: "markeder", markeder: "markeder", loppemarked: "loppemarkeder", foredrag: "foredrag", workshop: "workshops",
   festival: "festivaler", film: "filmvisninger", teater: "teaterforestillinger", dans: "dansearrangementer",
@@ -911,7 +916,7 @@ const DA_TOPIC_NOUN: Record<string, string> = {
 export function honestEmptyReply(intent: DiscoveryIntent, genreIn: string | null, lang: "da" | "en"): string {
   const da = lang !== "en";
   // R34: a genre named as a topic word ("techno") is still the subject.
-  const genre = genreIn ?? (intent.topicWords || []).find((w) => GENRES[w]) ?? null;
+  const genre = genreIn ?? (intent.topicWords || []).find((w) => GENRES[w]) ?? intent.namedGenre ?? null;
   const topics = nonGenreTopics(intent.topicWords);
   const human = (t: string) => t.replace(/[_-]+/g, " ").replace(/^mad drikke$/, "mad og drikke");
   const what = intent.kind === "places" && !genre

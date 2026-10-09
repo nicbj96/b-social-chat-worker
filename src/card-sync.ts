@@ -84,6 +84,10 @@ export function syncBulletsToItems(reply: string, items: { title?: string; name?
     return !!next && BULLET_RE.test(next);
   }).join("\n");
   out = sortBulletRunsByDate(out, items);
+  // R36: "søndag den 15.30" — a clock time written as a date.
+  out = out.replace(/\bden (\d{1,2})[.:](\d{2})(?!\d)/g, "kl. $1.$2");
+  // R36: an orphan fragment left after the list ("oktober 2026. Billetprisen er 135 DKK.").
+  out = out.split("\n").filter((l) => !/^\s*(?:januar|februar|marts|april|maj|juni|juli|august|september|oktober|november|december)\s+\d{4}\b/.test(l)).join("\n");
   // R35: chatty openers ("Hej! Her er nogle fede …") are out of the house style.
   out = out.replace(/^(?:Hej|Hey|Hi|Hello)[!,.]?\s+/i, "").replace(/^\p{Ll}/u, (c) => c.toUpperCase());
   return out.replace(/\n{3,}/g, "\n\n").trim();
