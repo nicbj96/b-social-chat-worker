@@ -2489,6 +2489,35 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
       // failed retrieval surfaces as an explicit error, never as a null or a
       // faked "no results". Evidence without any rows plus a named error is a
       // failed retrieval; evidence without rows and no error is genuinely empty.
+      // R28: final subject gate for the model path. Whatever tool the model
+      // picked, rows off the asked topic/genre/"koncert" never reach the reply;
+      // nothing left means the deterministic honest empty answer below.
+      {
+        const tdG = turnDiscovery(userMessages, ctx);
+        if (tdG.seeking) {
+          const userTexts = userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? ""));
+          const gG = chainGenre(userTexts);
+          const twG = Array.from(new Set([...nonGenreTopics(tdG.intent.topicWords), ...placeTopicsOf([latestUserMessage(userMessages)])]));
+          const wantsConcert = /koncert|concert/iu.test(latestUserMessage(userMessages));
+          const on = (r: any, kind: string) => {
+            if (gG && !rowIsGenre(r, gG)) return false;
+            if (twG.length && !twG.some((w) => topicWordHit(r, w))) return false;
+            if (wantsConcert && kind === "event" && (r.category || (r.interest_tags || []).length) && !/musik|koncert|concert|jazz|rock|band/iu.test(`${r.category ?? ""} ${(r.interest_tags || []).join(" ")} ${r.title ?? ""}`)) return false;
+            return true;
+          };
+          if (gG || twG.length || wantsConcert) {
+            const keepIds = new Set<string>();
+            for (const g of groundedToolResults as any[]) {
+              g.rows = (g.rows || []).filter((r: any) => on(r, g.kind));
+              for (const r of g.rows) if (r?.id) keepIds.add(String(r.id));
+            }
+            for (let i = groundedToolResults.length - 1; i >= 0; i--) if (!((groundedToolResults[i] as any).rows || []).length) groundedToolResults.splice(i, 1);
+            const prune = (arr: any[], idOf: (x: any) => any) => { for (let i = arr.length - 1; i >= 0; i--) if (!keepIds.has(String(idOf(arr[i])))) arr.splice(i, 1); };
+            prune(collectedEventIds, (x) => x); prune(collectedPlaceIds, (x) => x);
+            prune(collectedEvents, (x) => x?.id); prune(collectedPlaces, (x) => x?.id);
+          }
+        }
+      }
       const groundedSources = buildGroundedSources(groundedToolResults);
       const isNamedError = (code: string) =>
         ["budget_exhausted_embedding_calls", "embedding_failed", "rpc_failed", "rpc_unreachable", "turn_deadline_exceeded"].includes(code)
@@ -2506,7 +2535,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
         const partial = groundModelReply("", groundedSources, { lang: replyLang, retrievalError: namedError ?? null });
         deadlineDegradation = degradationNotice("turn_deadline_exceeded");
         grounded = {
-          reply: partial.reply ? `${deadlineDegradation.notice}\n\n${partial.reply}` : deadlineDegradation.notice,
+          reply: partial.reply ? `${deadlineDegradation.notice}\n\n${partial.reply.split("\n").filter((l) => !/^(Hentet:|Kilde opdateret:|Kildens opdateringstid|Retrieved:|Source updated:|Source update time)/.test(l.trim())).join("\n").trim()}` : deadlineDegradation.notice,
           grounding: partial.grounding,
           corrections: partial.corrections,
         };

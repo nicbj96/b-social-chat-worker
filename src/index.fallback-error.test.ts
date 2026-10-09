@@ -74,7 +74,7 @@ describe("directDiscoveryFallback — DB error vs empty", () => {
     const ai = vi.fn().mockRejectedValue(new Error("model down"));
     const res = await worker.fetch(chatRequest("jazz i København"), baseEnv(ai), executionContext());
     const body: any = await res.json();
-    expect(body.reply.toLowerCase()).toContain("ingen resultater");
+    expect(body.reply.toLowerCase()).toContain("jeg fandt ingen");
     expect(body.retrieval_error).not.toBe(true);
   });
 });
