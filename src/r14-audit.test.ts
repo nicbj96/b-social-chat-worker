@@ -408,3 +408,17 @@ describe("r26b", () => {
     expect(t.intent.dateWindow?.label).toBe("i weekenden");
   });
 });
+
+import { detailOrdinal, listedTitles, pickTitle } from "./detail-followup";
+describe("r29 detail follow-up", () => {
+  it("finds the ordinal", () => {
+    expect(detailOrdinal("fortæl mig mere om den første")).toBe(0);
+    expect(detailOrdinal("tell me more about the last one")).toBe(-1);
+    expect(detailOrdinal("jazz København")).toBeNull();
+  });
+  it("reads titles from bullets and from a single-item reply", () => {
+    expect(pickTitle(listedTitles("Her er nogle caféer i København:\n• Chillz Ice & Coffee\n• Kanal Caféen"), 0)).toBe("Chillz Ice & Coffee");
+    expect(pickTitle(listedTitles("Her er nogle jazz-events:\n\n• BØLLE - koncert på Drop Inn lørdag den 10. oktober 2026 kl. 23.00"), 0)).toBe("BØLLE");
+    expect(pickTitle(listedTitles("Her er et jazz-event i København:\nYoni Mayraz (UK) på KLEIN, København den 27. november kl. 20.30.\n\nVil du have flere?"), 0)).toBe("Yoni Mayraz");
+  });
+});
