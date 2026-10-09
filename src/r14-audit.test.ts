@@ -457,3 +457,17 @@ describe("r30d", () => {
     expect(idsNamedInReply([{ id: "n1", title: "NOLA JAZZ JAM" }, { id: "b", title: "BØLLE" }, { id: "n2", title: "NOLA JAZZ JAM" }], "• BØLLE x\n• NOLA JAZZ JAM 13. okt\n• NOLA JAZZ JAM 10. nov")).toEqual(["b", "n1", "n2"]);
   });
 });
+
+import { titleCandidates } from "./detail-followup";
+describe("r31", () => {
+  it("detail lookup tries the title before ' - '", () => { expect(titleCandidates("Café Sorgenfri - en hyggelig café")).toContain("Café Sorgenfri"); });
+  it("a bullet that names the full title mid-line gets its card", () => {
+    expect(idsNamedInReply([{ id: "a", title: "Anders - Gadens Stemmer" }, { id: "f", title: "Familiedans" }], '• Lørdag den 10. oktober: "Anders - Gadens Stemmer" på Flakhaven\n• Familiedans — søn.', true)).toEqual(["a", "f"]);
+  });
+  it("strict: no bullet names an event → no event cards", () => {
+    expect(idsNamedInReply([{ id: "e", title: "Halloween fest" }], "• Restaurant Koefoed\n• Alchemist", true)).toEqual([]);
+  });
+  it("inline coordinates are removed", () => {
+    expect(normalizeBullets("Caféen ligger på adressen [latitude: 55.67, longitude: 12.57] i København.")).toBe("Caféen ligger i København.");
+  });
+});

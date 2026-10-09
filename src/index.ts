@@ -49,7 +49,7 @@ import {
 import { rateLimitActorKey } from "./ratelimit";
 import { resolveChatTier } from "./plus-tier";
 import { syncBulletsToItems, idsNamedInReply } from "./card-sync";
-import { detailOrdinal, listedTitles, pickTitle, renderEventDetail, renderPlaceDetail } from "./detail-followup";
+import { titleCandidates, detailOrdinal, listedTitles, pickTitle, renderEventDetail, renderPlaceDetail } from "./detail-followup";
 import { chainGenre, rowIsGenre, topicWordHit, nonGenreTopics, GENRES, honestEmptyReply, topicTagList, placeNameNeedles, placeTopicsOf } from "./discovery-fallback";
 import { resolveTurnDiscovery, looksLikeEventListing, looksLikeUngroundedFact, clarifyDiscoveryReply } from "./discovery-fallback";
 import { aiBreakerIsOpen, searchEventsRelaxing, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
@@ -1782,7 +1782,8 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
         if (title && title.length >= 3) {
           try {
             const sb = createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY);
-            const pat = `%${title.replace(/[%_,()]/g, " ").trim()}%`;
+            for (const cand of titleCandidates(title)) {
+            const pat = `%${cand.replace(/[%_,()]/g, " ").trim()}%`;
             const { data: evs } = await sb.from("events").select("id, title, description, location, date, price, price_currency, url").ilike("title", pat).gte("date", new Date(Date.now() - 6 * 3600 * 1000).toISOString()).order("date", { ascending: true }).limit(1);
             if (evs && evs.length) {
               console.log(JSON.stringify({ event: "detail_followup", kind: "event" }));
@@ -1792,6 +1793,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
             if (pls && pls.length) {
               console.log(JSON.stringify({ event: "detail_followup", kind: "place" }));
               return jsonResponse({ reply: renderPlaceDetail(pls[0], lang), tool_calls_made: ["detail_followup"], event_ids: [], place_ids: [String(pls[0].id)], suggested_tag_slugs: [], grounding: "verified" });
+            }
             }
           } catch { /* fall through to the normal path */ }
         }
@@ -2634,8 +2636,16 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
               intent_proposal: turnIntentProposal,
               tool_calls_made: aiResponse.tool_calls.map((tc: any) => tc.function.name),
               // Cards follow the prose: the rows the reply names, first.
-              place_ids: idsNamedInReply(collectedPlaces.length ? collectedPlaces : collectedPlaceIds.map((id) => ({ id })), grounded.reply),
-              event_ids: idsNamedInReply(collectedEvents.length ? collectedEvents : collectedEventIds.map((id) => ({ id })), grounded.reply),
+              // R31: with bullets, a list no bullet names gets no cards (8 event
+              // cards under a list of restaurants), unless neither list matched.
+              ...(() => {
+                const pl = collectedPlaces.length ? collectedPlaces : collectedPlaceIds.map((id) => ({ id }));
+                const ev = collectedEvents.length ? collectedEvents : collectedEventIds.map((id) => ({ id }));
+                const pS = idsNamedInReply(pl, grounded.reply, true), eS = idsNamedInReply(ev, grounded.reply, true);
+                return pS.length || eS.length
+                  ? { place_ids: pS, event_ids: eS }
+                  : { place_ids: idsNamedInReply(pl, grounded.reply), event_ids: idsNamedInReply(ev, grounded.reply) };
+              })(),
               suggested_tag_slugs: [...new Set(collectedTagSlugs)],
               partial: deadlineHitMidTools || undefined,
               ...(rowsCapped ? { rows_capped: RESOURCE_CAPS.rows } : {}),

@@ -52,7 +52,7 @@ export function syncBulletsToItems(reply: string, items: { title?: string; name?
  * title the bullet starts with), so N bullets give at most N cards — two dates
  * of NOLA JAZZ JAM are two bullets and two cards, three Mosaik rows behind one
  * bullet are one card. Without bullets: every item the prose names. */
-export function idsNamedInReply(items: { id?: string; title?: string; name?: string }[], reply: string): string[] {
+export function idsNamedInReply(items: { id?: string; title?: string; name?: string }[], reply: string, strict = false): string[] {
   const seen = new Set<string>();
   const uniq: { id: string; full: string; core: string }[] = [];
   for (const it of items) {
@@ -68,10 +68,10 @@ export function idsNamedInReply(items: { id?: string; title?: string; name?: str
     const used = new Set<string>();
     const out: string[] = [];
     for (const b of bullets) {
-      const hit = uniq.find((u) => !used.has(u.id) && u.core.length >= 2 && (b.startsWith(u.core) || b.startsWith(u.full) || (u.core.length >= 10 && b.includes(u.core))));
+      const hit = uniq.find((u) => !used.has(u.id) && u.core.length >= 2 && (b.startsWith(u.core) || b.startsWith(u.full) || (u.core.length >= 10 && b.includes(u.core)) || (u.full.length >= 8 && b.includes(u.full))));
       if (hit) { used.add(hit.id); out.push(hit.id); }
     }
-    return out.length ? out : all;
+    return out.length || strict ? out : all;
   }
   const text = fold(reply);
   const named = uniq.filter((u) => u.core.length >= 3 && (text.includes(u.core) || text.includes(u.full) || (u.full.length > 12 && text.includes(u.full.slice(0, 18))))).map((u) => u.id);
