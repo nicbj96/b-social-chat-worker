@@ -46,3 +46,20 @@ export function syncBulletsToItems(reply: string, items: { title?: string; name?
   out = out.replace(/(^|\n)[ \t]*(?:Begge|Alle disse|Alle|Both|All of these|All)\s+(?:events?|arrangementer|aktiviteter|steder|places)?[^\n.?!]*(?:gratis|free|åbne|open|velegnede|suitable)[^\n.?!]*[.!]\s*/giu, "$1");
   return out.replace(/\n{3,}/g, "\n\n").trim();
 }
+
+/** Ids of the items the reply names, with the same matching the bullets use. */
+export function idsNamedInReply(items: { id?: string; title?: string; name?: string }[], reply: string): string[] {
+  const text = fold(reply);
+  const seen = new Set<string>();
+  const all: string[] = [];
+  const named: string[] = [];
+  for (const it of items) {
+    if (!it?.id || seen.has(String(it.id))) continue;
+    seen.add(String(it.id)); all.push(String(it.id));
+    const t = String(it.title ?? it.name ?? "");
+    if (t.trim().length < 3) continue;
+    const full = fold(t), core = titleCore(t);
+    if (text.includes(core) || text.includes(full) || (full.length > 12 && text.includes(full.slice(0, 18)))) named.push(String(it.id));
+  }
+  return named.length ? named : all;
+}

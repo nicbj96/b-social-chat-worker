@@ -438,3 +438,10 @@ describe("r30", () => {
   });
   it("København includes its districts", () => { expect(citySearchNeedles("København")).toContain("Brønshøj"); });
 });
+import { idsNamedInReply } from "./card-sync";
+describe("r30b", () => {
+  it("cards follow bold and shortened titles", () => {
+    const ids = idsNamedInReply([{ id: "a", title: "Ancestral Healing Workshop" }, { id: "b", title: "Akademisk litteratursøgning: Undervisning" }, { id: "c", title: "Andet" }], "• **Ancestral Healing Workshop** på X\n• **Akademisk litteratursøgning** på Y");
+    expect(ids).toEqual(["a", "b"]);
+  });
+});
