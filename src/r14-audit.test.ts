@@ -399,3 +399,12 @@ describe("r26 text", () => {
     expect(r).toBe("Her er noget:\nEvents:\n• A");
   });
 });
+
+describe("r26b", () => {
+  it("date-only Danish question resolves to DK, no city, window", () => {
+    const t = resolveTurnDiscovery(["hvad sker der i weekenden"], undefined, new Date("2026-10-09T10:00:00Z"));
+    expect(t.seeking).toBe(true);
+    expect(t.intent.city).toBeUndefined();
+    expect(t.intent.dateWindow?.label).toBe("i weekenden");
+  });
+});
