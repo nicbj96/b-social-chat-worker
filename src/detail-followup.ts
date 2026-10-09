@@ -41,6 +41,16 @@ export function listedTitles(reply: string): string[] {
   return [];
 }
 
+/** Lookup candidates for a bullet title: full, then before " - " / " — ". */
+export function titleCandidates(title: string): string[] {
+  const out = [title];
+  for (const sep of [" - ", " – ", " — ", ": "]) {
+    const i = title.indexOf(sep);
+    if (i >= 3) out.push(title.slice(0, i).trim());
+  }
+  return Array.from(new Set(out.filter((t) => t.length >= 3)));
+}
+
 export function pickTitle(titles: string[], ordinal: number): string | null {
   if (!titles.length) return null;
   const idx = ordinal < 0 ? titles.length - 1 : ordinal;

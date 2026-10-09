@@ -215,6 +215,8 @@ export function normalizeBullets(text: string): string {
   const cleaned = String(text || "")
     // Raw fields are not prose: "latitude: 55.68" means nothing to a reader.
     .replace(/^[ \t]*(?:latitude|longitude|lat|lng|lon)\s*:\s*-?\d+(?:\.\d+)?[ \t]*$\n?/gimu, "")
+    // Inline coordinates ("ligger på adressen [latitude: 55.67, longitude: 12.57]").
+    .replace(/\s*(?:på adressen|at the address|med adressen)?\s*\[?\(?\s*(?:latitude|lat)\s*:\s*-?\d+(?:\.\d+)?\s*,\s*(?:longitude|lng|lon)\s*:\s*-?\d+(?:\.\d+)?\s*\]?\)?/giu, "")
     // Markdown headings render as "###" in the bubble.
     .replace(/^[ \t]*#{1,6}[ \t]+(.+)$/gmu, "$1:")
     // A reply that opens mid-thought ("Men her er …").
