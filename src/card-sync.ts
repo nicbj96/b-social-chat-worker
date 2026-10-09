@@ -104,7 +104,15 @@ export function sortBulletRunsByDate(reply: string, items: { title?: string; nam
   const timeOf = (l: string) => {
     const f = fold(l.replace(/^[ \t]*(?:[•*\-]|\d+\.)[ \t]+/, ""));
     const hits = dated.filter((d) => f.startsWith(d.full) || f.startsWith(d.core));
-    if (!hits.length) return null;
+    if (!hits.length) {
+      // R38: "(5-6 år) Dansk Danseteater …" — fall back to the date written in the bullet itself.
+      const MO: Record<string, number> = { januar: 0, februar: 1, marts: 2, april: 3, maj: 4, juni: 5, juli: 6, august: 7, september: 8, oktober: 9, november: 10, december: 11 };
+      const w = fold(l).match(/(\d{1,2})\.\s*(januar|februar|marts|april|maj|juni|juli|august|september|oktober|november|december)(?:\s+(\d{4}))?/);
+      if (!w) return null;
+      const now = new Date(); const mo = MO[w[2]];
+      const yr = w[3] ? Number(w[3]) : (mo < now.getUTCMonth() - 1 ? now.getUTCFullYear() + 1 : now.getUTCFullYear());
+      return Date.UTC(yr, mo, Number(w[1]), 12);
+    }
     // Same title on several dates: use the date written in the bullet when it matches one.
     if (hits.length > 1) {
       const m = f.match(/(\d{1,2})\.\s*(?:okt|oktober|nov|november|dec|december|sep|september|jan|januar|feb|februar|mar|marts|apr|april|maj|jun|juni|jul|juli|aug|august)/);
