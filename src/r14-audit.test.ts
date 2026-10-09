@@ -131,7 +131,7 @@ describe("r18c", () => {
 describe("r19", () => {
   it("N7: yoga with no yoga rows says so", () => {
     const r = formatFallbackReply({ kind: "events", city: "Aarhus", topicWords: ["yoga"], limit: 4 } as any, [], [{ id: "1", title: "Mad & Comedy", location: "Aarhus" } as any], "da", []);
-    expect(r.reply).toContain("Jeg fandt ingen yoga-events i Aarhus");
+    expect(r.reply).toContain("Jeg fandt ingen yogahold i Aarhus");
     expect(r.reply).not.toContain("Mad & Comedy");
   });
   it("N4: fuzzy duplicate facts are not appended", () => {
@@ -205,7 +205,7 @@ import { inferResponseLanguage } from "./discovery-fallback";
 describe("r21b", () => {
   it("English kids question is English", () => { expect(inferResponseLanguage("kids activities Aarhus Sunday")).toBe("en"); });
   it("empty result drops 'Her er nogle' intro", () => {
-    const r = groundModelReply("Her er nogle jazz-events i København:\n\nIngen resultater fundet.", [], { lang: "da" });
+    const r = groundModelReply("Her er nogle jazzkoncerter i København:\n\nIngen resultater fundet.", [], { lang: "da" });
     expect(r.reply).not.toMatch(/Her er nogle/);
   });
 });
@@ -275,7 +275,7 @@ describe("r24", () => {
     const t = resolveTurnDiscovery(["jazz København", "hvad sker der dagen efter?"], undefined, new Date("2026-10-08T10:00:00Z"));
     const r = honestEmptyReply(t.intent, "jazz", "da");
     expect(r).toContain("fredag den 9. oktober");
-    expect(r).toContain("jazz-events i København");
+    expect(r).toContain("jazzkoncerter i København");
     expect(r).not.toMatch(/lørdag/);
   });
   it("stand-up dagen efter = lørdag", () => {
@@ -522,5 +522,23 @@ describe("r35", () => {
   });
   it("chatty opener goes", () => {
     expect(syncBulletsToItems("Hej! Her er nogle shows:\n• Late Mic — kl. 23", [{ title: "Late Mic" }])).toMatch(/^Her er nogle shows:/);
+  });
+});
+
+describe("r36", () => {
+  it("clock time is not a date; orphan month fragment goes", () => {
+    const r = syncBulletsToItems("Her:\n\n• Familiedans på Kulturmaskinen - søndag den 15.30.\n\noktober 2026. Billetprisen er 135 DKK.\n\nVil du have mere?", [{ title: "Familiedans" }]);
+    expect(r).toContain("søndag kl. 15.30");
+    expect(r).not.toContain("oktober 2026.");
+    expect(r).toContain("Vil du have mere?");
+  });
+  it("Danish genre empty answers use natural nouns", () => {
+    expect(honestEmptyReply({ kind: "events", city: "Aarhus", topicWords: ["elektronisk"], limit: 4 } as any, null, "da")).toContain("elektronisk musik");
+  });
+});
+describe("r36b", () => {
+  it("named genre survives into the empty answer", () => {
+    const r = honestEmptyReply({ kind: "events", city: "København", namedGenre: "hiphop", limit: 4 } as any, null, "da");
+    expect(r).toContain("hiphopkoncerter");
   });
 });
