@@ -549,3 +549,9 @@ describe("r37", () => {
     expect(syncBulletsToItems("Her:\n- **Akrobat**: x", [{ title: "Akrobat" }])).toBe("Her:\n• Akrobat: x");
   });
 });
+import { deadlineBullets } from "./card-sync";
+describe("r38", () => {
+  it("deadline fallback uses bullets", () => {
+    expect(deadlineBullets("Tidsgrænsen udløb.\n\nTalentshow — 135 DKK\nTidspunkt: søn. 11. okt., 14.15")).toBe("Tidsgrænsen udløb.\n\n• Talentshow — søn. 11. okt., 14.15 — 135 DKK");
+  });
+});

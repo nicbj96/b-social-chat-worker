@@ -48,7 +48,7 @@ import {
 } from "./chat-provider";
 import { rateLimitActorKey } from "./ratelimit";
 import { resolveChatTier } from "./plus-tier";
-import { syncBulletsToItems, idsNamedInReply, placeBulletsNameOnly } from "./card-sync";
+import { syncBulletsToItems, idsNamedInReply, placeBulletsNameOnly, deadlineBullets } from "./card-sync";
 import { titleCandidates, detailOrdinal, listedTitles, pickTitle, renderEventDetail, renderPlaceDetail } from "./detail-followup";
 import { chainGenre, rowIsGenre, topicWordHit, nonGenreTopics, GENRES, honestEmptyReply, topicTagList, placeNameNeedles, placeTopicsOf } from "./discovery-fallback";
 import { resolveTurnDiscovery, looksLikeEventListing, looksLikeUngroundedFact, clarifyDiscoveryReply } from "./discovery-fallback";
@@ -2616,6 +2616,8 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
           grounding: partial.grounding,
           corrections: partial.corrections,
         };
+        // R38: same bullet shape as a normal answer ("• Talentshow — søn. 11. okt., 14.15 — 135 DKK").
+        grounded = { ...grounded, reply: deadlineBullets(String(grounded.reply || "")) };
       } else {
         const repaired = repairContradictoryGroundedReply(
           finalResponse.response || finalResponse.content || "",

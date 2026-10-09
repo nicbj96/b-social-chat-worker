@@ -175,3 +175,17 @@ export function idsNamedInReply(items: { id?: string; title?: string; name?: str
   const named = uniq.filter((u) => u.core.length >= 3 && (text.includes(u.core) || text.includes(u.full) || (u.full.length > 12 && text.includes(u.full.slice(0, 18))))).map((u) => u.id);
   return named.length ? named : all;
 }
+
+/** R38: pair "Title — price" + "Tidspunkt: …" lines into one bullet in the deadline fallback. */
+export function deadlineBullets(reply: string): string {
+  const ls = reply.split("\n"); const out: string[] = [];
+  for (let i = 0; i < ls.length; i++) {
+    const l = ls[i]; const nx = ls[i + 1] ?? "";
+    const m = /^(.+) — ([^—]+)$/.exec(l);
+    const t = /^(?:Tidspunkt|Time): (.+)$/.exec(nx);
+    if (m && t) { out.push(`• ${m[1]} — ${t[1]} — ${m[2]}`); i++; continue; }
+    if (m && i > 0) { out.push(`• ${l}`); continue; }
+    out.push(l);
+  }
+  return out.join("\n");
+}
