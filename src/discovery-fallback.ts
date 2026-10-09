@@ -607,9 +607,15 @@ export function formatFallbackReply(
   const missingIntro = missing
     ? (language === "en" ? `I found nothing matching "${missing}". Other events${intent.city ? ` in ${intent.city}` : ""}${intent.dateWindow && !relaxed.includes("date") ? ` (${intent.dateWindow.label})` : ""}:` : `Jeg fandt ikke noget med "${missing}". Andre events${intent.city ? ` i ${intent.city}` : ""}${intent.dateWindow && !relaxed.includes("date") ? ` (${intent.dateWindow.label})` : ""}:`)
     : "";
+  // R40: say what the list is ("Her er events i København i aften:"), and that a
+  // list without a city comes from the whole country.
+  const enIntro = language === "en";
+  const contextIntro = selectedEvents.length > 0 && selectedPlaces.length === 0
+    ? `${enIntro ? "Here are events" : "Her er events"}${intent.city ? (enIntro ? ` in ${intent.city}` : ` i ${intent.city}`) : (enIntro ? " from across the catalogue" : " fra hele landet")}${intent.dateWindow && !relaxed.includes("date") ? ` ${intent.dateWindow.label}` : ""}:`
+    : copy.intro;
   return {
     reply: lines.length > 0
-      ? `${missingIntro ? missingIntro : relaxed.length > 0 && selectedEvents.length > 0 ? relaxedIntro : substituting ? `${copy.placesInstead}${intent.city ? ` ${copy.cityPrefix} ${intent.city}` : ""}:` : copy.intro}\n${lines.join("\n")}`
+      ? `${missingIntro ? missingIntro : relaxed.length > 0 && selectedEvents.length > 0 ? relaxedIntro : substituting ? `${copy.placesInstead}${intent.city ? ` ${copy.cityPrefix} ${intent.city}` : ""}:` : contextIntro}\n${lines.join("\n")}`
       : honestEmptyReply(intent, null, language === "en" ? "en" : "da"),
     tool_calls_made: ["direct_discovery_fallback"],
     place_ids: selectedPlaces.map((place) => String(place.id)).slice(0, intent.limit),
