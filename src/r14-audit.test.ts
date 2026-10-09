@@ -542,3 +542,10 @@ describe("r36b", () => {
     expect(r).toContain("hiphopkoncerter");
   });
 });
+describe("r37", () => {
+  it("dated bullets sort even with an unmatched one; bold goes", () => {
+    const r = sortBulletRunsByDate("• Cirkus — apr\n• Ukendt\n• Akrobat — okt", [{ title: "Akrobat", date: "2026-10-12T10:00:00Z" }, { title: "Cirkus", date: "2027-04-01T10:00:00Z" }]);
+    expect(r).toBe("• Akrobat — okt\n• Ukendt\n• Cirkus — apr");
+    expect(syncBulletsToItems("Her:\n- **Akrobat**: x", [{ title: "Akrobat" }])).toBe("Her:\n• Akrobat: x");
+  });
+});
