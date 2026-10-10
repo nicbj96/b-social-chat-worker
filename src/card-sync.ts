@@ -218,7 +218,9 @@ export function renderEventBullets(reply: string, items: { title?: string; locat
     const hm = new Intl.DateTimeFormat("da-DK", { timeZone: "Europe/Copenhagen", hour: "2-digit", minute: "2-digit" }).format(dt).replace(":", ".");
     return hm === "00.00" ? day : `${day} ${da ? "kl." : "at"} ${hm}`;
   };
-  const price = (p: unknown, c?: unknown) => typeof p === "number" && Number.isFinite(p) ? (p === 0 ? (da ? "Gratis" : "Free") : `${p} ${typeof c === "string" && /^[A-Z]{3}$/.test(c) ? c : "DKK"}`) : (da ? "Pris ukendt" : "Price unknown");
+  const price = (p: unknown, c?: unknown) => typeof p === "string" && p.trim()
+    ? (da ? p.trim() : ({ "Pris ukendt": "Price unknown", "Gratis": "Free" } as Record<string, string>)[p.trim()] ?? p.trim().replace("(valuta ukendt)", "(currency unknown)"))
+    : typeof p === "number" && Number.isFinite(p) ? (p === 0 ? (da ? "Gratis" : "Free") : `${p} ${typeof c === "string" && /^[A-Z]{3}$/.test(c) ? c : "DKK"}`) : (da ? "Pris ukendt" : "Price unknown");
   return String(reply || "").split("\n").map((l) => {
     if (!BULLET_RE.test(l)) return l;
     const b = fold(l.replace(/^[ \t]*(?:[•*\-]|\d+\.)[ \t]+/, ""));

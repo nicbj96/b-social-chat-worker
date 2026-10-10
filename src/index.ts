@@ -2115,7 +2115,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                       (out.events || []).forEach((e: any) => {
                         if (!e?.id) return;
                         collectedEventIds.push(e.id);
-                        collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date_raw ?? e.date, price: e.price, price_currency: e.price_currency } as any);
+                        collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date_raw ?? e.date, price: e.price_amount ?? e.price, price_currency: e.currency ?? e.price_currency } as any);
                       });
                       if ((out.events || []).length > 0 && !out.events_error) {
                         groundedToolResults.push({ kind: "event", retrieved_at: new Date().toISOString(), rows: out.events });
@@ -2193,7 +2193,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                     result.results.forEach((e: any) => {
                       if (!e?.id) return;
                       collectedEventIds.push(e.id);
-                      collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date_raw ?? e.date, price: e.price, price_currency: e.price_currency } as any);
+                      collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date_raw ?? e.date, price: e.price_amount ?? e.price, price_currency: e.currency ?? e.price_currency } as any);
                     });
                     if (result.results.length > 0) groundedToolResults.push({ kind: "event", retrieved_at: new Date().toISOString(), rows: result.results });
                   }
