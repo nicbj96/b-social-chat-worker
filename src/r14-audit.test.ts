@@ -607,3 +607,8 @@ describe("r41d", () => {
     expect(tidyVenue("Knock Knock Comedy Club, København")).toBe("Knock Knock Comedy Club, København");
   });
 });
+describe("r41e", () => {
+  it("bullet without the title's year still gets the card format", () => {
+    expect(renderEventBullets("• Mr Woofmantic Games & Jazz på Kildevæld kl. 19.00", [{ title: "Mr Woofmantic Games & Jazz 2026", location: "Kildevæld Kulturcenter, København", date: "2026-11-20T18:00:00Z", price: "135 DKK" }] as any, "da")).toBe("• Mr Woofmantic Games & Jazz 2026 — Kildevæld Kulturcenter, København — fredag den 20. november kl. 19.00 — 135 DKK");
+  });
+});

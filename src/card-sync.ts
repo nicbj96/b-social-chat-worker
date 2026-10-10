@@ -225,7 +225,7 @@ export function renderEventBullets(reply: string, items: { title?: string; locat
     if (!BULLET_RE.test(l)) return l;
     const b = fold(l.replace(/^[ \t]*(?:[•*\-]|\d+\.)[ \t]+/, ""));
     const b2 = b.replace(/^(?:teaterforestilling|koncert|event|forestilling)\s+/, "");
-    const k = uniq.findIndex((u, i) => !used.has(i) && u.core.length >= 3 && [b, b2].some((x) => x.startsWith(u.full) || x.startsWith(u.core)));
+    const k = uniq.findIndex((u, i) => !used.has(i) && u.core.length >= 3 && [b, b2].some((x) => x.startsWith(u.full) || x.startsWith(u.core) || (u.full.length > 18 && x.startsWith(u.full.slice(0, 18)))));
     if (k < 0) return l;
     used.add(k);
     const { it } = uniq[k];
