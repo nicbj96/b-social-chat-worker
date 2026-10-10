@@ -600,3 +600,10 @@ describe("r41c", () => {
     expect(renderEventBullets("• Rytmik z", items as any, "en")).toContain("— Free");
   });
 });
+import { tidyVenue } from "./card-sync";
+describe("r41d", () => {
+  it("raw source addresses are tidied", () => {
+    expect(tidyVenue("Drop inn, Kompagnistræde 34, Copenhagen, 1208, Denmark")).toBe("Drop inn, København");
+    expect(tidyVenue("Knock Knock Comedy Club, København")).toBe("Knock Knock Comedy Club, København");
+  });
+});

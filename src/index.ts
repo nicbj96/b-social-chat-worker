@@ -2650,11 +2650,12 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
         if (collectedEvents.length) grounded = { ...grounded, reply: renderEventBullets(String(grounded.reply || ""), collectedEvents as any[], replyLang) };
       }
       // R41: a list cut at one page says so ("d1 stops at 8 shows").
-      if (rowsCapped) {
+      {
         const r0 = String(grounded.reply || "");
         const nB = r0.split("\n").filter((l) => /^[ \t]*•[ \t]+\S/.test(l)).length;
-        if (nB >= RESOURCE_CAPS.rows) {
-          const note = replyLang === "en" ? "There are more results — search on b-social.net/soeg to see them all." : "Der er flere resultater — søg på b-social.net/soeg for at se dem alle.";
+        // R41d: a full page (8) means the catalogue may hold more, capped or not.
+        if (nB >= RESOURCE_CAPS.rows && collectedEvents.length + collectedPlaces.length >= RESOURCE_CAPS.rows) {
+          const note = replyLang === "en" ? "There may be more results — search on b-social.net/soeg to see them all." : "Der kan være flere resultater — søg på b-social.net/soeg for at se dem alle.";
           const ls = r0.split("\n"); let last = -1; ls.forEach((l, i) => { if (/^[ \t]*•[ \t]+\S/.test(l)) last = i; });
           ls.splice(last + 1, 0, "", note);
           grounded = { ...grounded, reply: ls.join("\n").replace(/\n{3,}/g, "\n\n") };
