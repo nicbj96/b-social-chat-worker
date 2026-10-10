@@ -48,7 +48,7 @@ import {
 } from "./chat-provider";
 import { rateLimitActorKey } from "./ratelimit";
 import { resolveChatTier } from "./plus-tier";
-import { syncBulletsToItems, idsNamedInReply, placeBulletsNameOnly, deadlineBullets, renderEventBullets } from "./card-sync";
+import { syncBulletsToItems, idsNamedInReply, placeBulletsNameOnly, deadlineBullets } from "./card-sync";
 import { titleCandidates, detailOrdinal, listedTitles, pickTitle, renderEventDetail, renderPlaceDetail } from "./detail-followup";
 import { chainGenre, rowIsGenre, topicWordHit, nonGenreTopics, GENRES, honestEmptyReply, topicTagList, placeNameNeedles, placeTopicsOf } from "./discovery-fallback";
 import { resolveTurnDiscovery, looksLikeEventListing, looksLikeUngroundedFact, clarifyDiscoveryReply } from "./discovery-fallback";
@@ -2115,7 +2115,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                       (out.events || []).forEach((e: any) => {
                         if (!e?.id) return;
                         collectedEventIds.push(e.id);
-                        collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date_raw ?? e.date, price: e.price, price_currency: e.price_currency } as any);
+                        collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date_raw ?? e.date });
                       });
                       if ((out.events || []).length > 0 && !out.events_error) {
                         groundedToolResults.push({ kind: "event", retrieved_at: new Date().toISOString(), rows: out.events });
@@ -2193,7 +2193,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                     result.results.forEach((e: any) => {
                       if (!e?.id) return;
                       collectedEventIds.push(e.id);
-                      collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date_raw ?? e.date, price: e.price, price_currency: e.price_currency } as any);
+                      collectedEvents.push({ id: e.id, title: e.title, location: e.location, date: e.date_raw ?? e.date });
                     });
                     if (result.results.length > 0) groundedToolResults.push({ kind: "event", retrieved_at: new Date().toISOString(), rows: result.results });
                   }
@@ -2647,7 +2647,6 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
       if (!deadlineHitMidTools && (collectedEvents.length || collectedPlaces.length)) {
         grounded = { ...grounded, reply: syncBulletsToItems(String(grounded.reply || ""), [...collectedEvents, ...collectedPlaces] as any[]) };
         if (collectedPlaces.length) grounded = { ...grounded, reply: placeBulletsNameOnly(String(grounded.reply || ""), collectedPlaces as any[]) };
-        if (collectedEvents.length) grounded = { ...grounded, reply: renderEventBullets(String(grounded.reply || ""), collectedEvents as any[], replyLang) };
       }
       // R41: a list cut at one page says so ("d1 stops at 8 shows").
       if (rowsCapped) {
