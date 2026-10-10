@@ -2618,6 +2618,8 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
         };
         // R38: same bullet shape as a normal answer ("• Talentshow — søn. 11. okt., 14.15 — 135 DKK").
         grounded = { ...grounded, reply: deadlineBullets(String(grounded.reply || "")) };
+        // R42: bullets in the normal card format (the degradation notice stays — contract).
+        grounded = { ...grounded, reply: renderEventBullets(String(grounded.reply || ""), collectedEvents as any[], replyLang) };
       } else {
         const repaired = repairContradictoryGroundedReply(
           finalResponse.response || finalResponse.content || "",

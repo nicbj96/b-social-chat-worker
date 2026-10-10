@@ -1,4 +1,5 @@
 import { resolveDateWindow, type DateWindow } from "./date-window";
+import { tidyVenue } from "./card-sync";
 
 export type DiscoveryKind = "places" | "events" | "both";
 export type ResponseLanguage = "da" | "en";
@@ -579,7 +580,15 @@ export function formatFallbackReply(
           : copy.cityMissing;
       return `• ${place.name} — ${where}`;
     }),
-    ...selectedEvents.map((event) => `• ${event.title} — ${(event.location && !/^(none|null|undefined)$/i.test(String(event.location).trim()) ? event.location : "") || copy.locationMissing}${event.date ? ` (${event.date})` : ""}${intent.free ? (language === "en" ? " — Free" : " — Gratis") : intent.priceAsked && (event as any).price ? ` — ${(event as any).price}` : ""}`),
+    // R42: same bullet shape as the model path: "Title — venue — date — price".
+    ...selectedEvents.map((event) => {
+      const loc = event.location && !/^(none|null|undefined)$/i.test(String(event.location).trim()) ? tidyVenue(String(event.location)) : "";
+      const p = (event as any).price;
+      const priceTxt = intent.free ? (language === "en" ? "Free" : "Gratis")
+        : typeof p === "string" && p.trim() ? (language === "en" ? (({ "Pris ukendt": "Price unknown", "Gratis": "Free" } as Record<string, string>)[p.trim()] ?? p.trim()) : p.trim())
+        : (language === "en" ? "Price unknown" : "Pris ukendt");
+      return ["• " + event.title, loc || copy.locationMissing, event.date ? String(event.date).replace(/ (\d{4}) kl\./, " kl.") : "", priceTxt].filter(Boolean).join(" — ");
+    }),
   ].slice(0, intent.limit);
 
   // R24: a named topic ("legepladser", "meditation") that no row matches is
