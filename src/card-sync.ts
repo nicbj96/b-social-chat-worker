@@ -229,6 +229,15 @@ export function renderEventBullets(reply: string, items: { title?: string; locat
     if (k < 0) return l;
     used.add(k);
     const { it } = uniq[k];
-    return ["• " + String(it.title).trim(), it.location ? String(it.location).trim() : "", when(it.date), price(it.price, it.price_currency)].filter(Boolean).join(" — ");
+    return ["• " + String(it.title).trim(), it.location ? tidyVenue(String(it.location)) : "", when(it.date), price(it.price, it.price_currency)].filter(Boolean).join(" — ");
   }).join("\n");
+}
+
+/** R41d: "Drop inn, Kompagnistræde 34, Copenhagen, 1208, Denmark" → "Drop inn, København". */
+export function tidyVenue(loc: string): string {
+  const parts = loc.split(",").map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 3) return loc.trim().replace(/\bCopenhagen\b/g, "København");
+  const city = { copenhagen: "København", aarhus: "Aarhus", odense: "Odense", aalborg: "Aalborg" } as Record<string, string>;
+  const kept = parts.filter((p, i) => i === 0 || !(/^\d{4}$/.test(p) || /^(denmark|danmark)$/i.test(p) || /\d/.test(p)));
+  return kept.map((p) => city[p.toLowerCase()] ?? p).join(", ");
 }
