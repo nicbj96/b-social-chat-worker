@@ -203,3 +203,30 @@ export function deadlineBullets(reply: string): string {
   }
   return out.join("\n");
 }
+
+/** R41: every event bullet that names one card is written from the card itself:
+ *  "• Title — venue — lørdag 10. oktober kl. 11.00 — Gratis". One format, catalogue facts only. */
+export function renderEventBullets(reply: string, items: { title?: string; location?: string; date?: string; price?: unknown; price_currency?: unknown }[], lang: "da" | "en"): string {
+  const uniq = items.filter((it) => it?.title && String(it.title).trim().length >= 3).map((it) => ({ it, full: fold(String(it.title)), core: titleCore(String(it.title)) }));
+  if (!uniq.length) return reply;
+  const used = new Set<number>();
+  const da = lang !== "en";
+  const when = (d?: string) => {
+    if (!d || !Number.isFinite(Date.parse(d))) return "";
+    const dt = new Date(d);
+    const day = new Intl.DateTimeFormat(da ? "da-DK" : "en-GB", { timeZone: "Europe/Copenhagen", weekday: "long", day: "numeric", month: "long" }).format(dt).replace(/^(\p{L}+) (?=\d)/u, da ? "$1 den " : "$1 ");
+    const hm = new Intl.DateTimeFormat("da-DK", { timeZone: "Europe/Copenhagen", hour: "2-digit", minute: "2-digit" }).format(dt).replace(":", ".");
+    return hm === "00.00" ? day : `${day} ${da ? "kl." : "at"} ${hm}`;
+  };
+  const price = (p: unknown, c?: unknown) => typeof p === "number" && Number.isFinite(p) ? (p === 0 ? (da ? "Gratis" : "Free") : `${p} ${typeof c === "string" && /^[A-Z]{3}$/.test(c) ? c : "DKK"}`) : (da ? "Pris ukendt" : "Price unknown");
+  return String(reply || "").split("\n").map((l) => {
+    if (!BULLET_RE.test(l)) return l;
+    const b = fold(l.replace(/^[ \t]*(?:[•*\-]|\d+\.)[ \t]+/, ""));
+    const b2 = b.replace(/^(?:teaterforestilling|koncert|event|forestilling)\s+/, "");
+    const k = uniq.findIndex((u, i) => !used.has(i) && u.core.length >= 3 && [b, b2].some((x) => x.startsWith(u.full) || x.startsWith(u.core)));
+    if (k < 0) return l;
+    used.add(k);
+    const { it } = uniq[k];
+    return ["• " + String(it.title).trim(), it.location ? String(it.location).trim() : "", when(it.date), price(it.price, it.price_currency)].filter(Boolean).join(" — ");
+  }).join("\n");
+}

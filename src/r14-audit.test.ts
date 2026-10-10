@@ -583,3 +583,12 @@ describe("r40", () => {
     expect(formatFallbackReply({ kind: "events", limit: 4 } as any, [], ev as any, "da").reply).toMatch(/^Her er events fra hele landet:/);
   });
 });
+import { renderEventBullets } from "./card-sync";
+describe("r41", () => {
+  it("event bullets are written from the card: one format, price or 'Pris ukendt'", () => {
+    const r = renderEventBullets("Her:\n\n• Lørdagsrytmik 1-2 år at Vesterbro - a fun session.\n• Stjernestunder - Den jazzede Murakami den 24. oktober, pris: 189 DKK", [
+      { title: "Lørdagsrytmik 1-2 år", location: "Vesterbro Bibliotek, København", date: "2026-10-10T07:30:00Z" },
+      { title: "Stjernestunder - Den jazzede Murakami", location: "BRØK, København", date: "2026-10-24T18:00:00Z", price: 189 }], "da");
+    expect(r).toBe("Her:\n\n• Lørdagsrytmik 1-2 år — Vesterbro Bibliotek, København — lørdag den 10. oktober kl. 09.30 — Pris ukendt\n• Stjernestunder - Den jazzede Murakami — BRØK, København — lørdag den 24. oktober kl. 20.00 — 189 DKK");
+  });
+});
