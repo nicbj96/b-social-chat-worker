@@ -2648,6 +2648,17 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
         grounded = { ...grounded, reply: syncBulletsToItems(String(grounded.reply || ""), [...collectedEvents, ...collectedPlaces] as any[]) };
         if (collectedPlaces.length) grounded = { ...grounded, reply: placeBulletsNameOnly(String(grounded.reply || ""), collectedPlaces as any[]) };
       }
+      // R41: a list cut at one page says so ("d1 stops at 8 shows").
+      if (rowsCapped) {
+        const r0 = String(grounded.reply || "");
+        const nB = r0.split("\n").filter((l) => /^[ \t]*•[ \t]+\S/.test(l)).length;
+        if (nB >= RESOURCE_CAPS.rows) {
+          const note = replyLang === "en" ? "There are more results — search on b-social.net/soeg to see them all." : "Der er flere resultater — søg på b-social.net/soeg for at se dem alle.";
+          const ls = r0.split("\n"); let last = -1; ls.forEach((l, i) => { if (/^[ \t]*•[ \t]+\S/.test(l)) last = i; });
+          ls.splice(last + 1, 0, "", note);
+          grounded = { ...grounded, reply: ls.join("\n").replace(/\n{3,}/g, "\n\n") };
+        }
+      }
 
       // M41 resource cap: the response payload is byte-capped, and any cut is
       // flagged on the payload — never a silently clipped answer.
