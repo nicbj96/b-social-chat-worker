@@ -625,7 +625,7 @@ import { searchEventsRelaxing as serR44, inferDiscoveryIntent as idiR44 } from "
 describe("r44c", () => {
   it("workshop København finds title matches the source tagged social-hobby", async () => {
     const intent = idiR44("workshop København");
-    const r = await serR44(intent, async (f: any) => f.title_like?.includes("workshop") ? { results: [{ id: "w", title: "Skriveworkshop: Fantasy" }] } : { results: [] });
+    const r = await serR44(intent, async (f: any) => f.title_like?.includes("workshop") ? { results: [{ id: "w", title: "Skriveworkshop: Fantasy" }] } : f.tags ? { results: [] } : { results: [{ id: "x", title: "Koncert" }] });
     expect(r.results.map((x: any) => x.id)).toEqual(["w"]);
   });
 });

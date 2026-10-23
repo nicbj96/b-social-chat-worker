@@ -382,8 +382,8 @@ export async function searchEventsRelaxing(
     const words = [...tws.filter((w) => w.length >= 4), ...(kids ? ["børn", "familie", "mindste", "tweens", "kids"] : [])];
     if (words.length) {
       const titled: EventFilters = { ...base, category: undefined, tags: undefined, title_like: Array.from(new Set(words)).join(",") };
-      const at = tws.length && !base.tags ? 1 : 0;
-      steps.splice(at + 1, 0, { filters: { ...titled, ...(intent.dateWindow ? { date_from: intent.dateWindow.from, date_to: intent.dateWindow.to } : {}) }, relaxed: [] });
+      // Right after the tag step, before the broad city-only step.
+      steps.splice(1, 0, { filters: { ...titled, ...(intent.dateWindow ? { date_from: intent.dateWindow.from, date_to: intent.dateWindow.to } : {}) }, relaxed: [] });
     }
   }
   // R27: the reader named a day; other days are not an answer to it.
