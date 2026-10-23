@@ -1404,6 +1404,8 @@ async function directDiscoveryFallback(
     const low = String(latestMessage || "").toLowerCase();
     const kidsAsked = intent.eventCategory === "familie" || /b[øo]rn|kids|famil/u.test(low);
     if (intent.eventCategory === "musik" && !kidsAsked) events = events.filter((e: any) => !/\(\s*\d+\s*[-–]\s*\d+\s*år\s*\)|(?<!\p{L})(?:dyredans|babyrytmik|rytmik)(?!\p{L})/iu.test(String(e.title ?? "")));
+    // R47: "festival" means festivals, not beer tours or concerts that merely mention one.
+    if (/(?<!\p{L})festival(?:er|s)?(?!\p{L})/u.test(low)) events = events.filter((e: any) => /festival/iu.test(String(e.title ?? "")) && !/(?<!\p{L})(?:tours?|guided|guidede)(?!\p{L})/iu.test(String(e.title ?? "")));
     if (/(?<!\p{L})(?:fest|fester|party|parties)(?!\p{L})/u.test(low)) {
       const isParty = (e: any) => /fest|party|klubaften|(?<!\p{L})dj(?!\p{L})|halloween|natklub|rave|disco|boots/iu.test(`${e.title ?? ""} ${(Array.isArray(e.interest_tags) ? e.interest_tags.join(" ") : "")}`);
       events = events.filter(isParty);
