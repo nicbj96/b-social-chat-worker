@@ -1399,7 +1399,22 @@ async function directDiscoveryFallback(
     });
   }
 
-  return jsonResponse(formatFallbackReply(intent, places, events, language, relaxed));
+  // R46: "koncerter" are not toddler classes; "fest" is a party, not a bootcamp.
+  {
+    const low = String(latestMessage || "").toLowerCase();
+    const kidsAsked = intent.eventCategory === "familie" || /b[øo]rn|kids|famil/u.test(low);
+    if (intent.eventCategory === "musik" && !kidsAsked) events = events.filter((e: any) => !/\(\s*\d+\s*[-–]\s*\d+\s*år\s*\)|(?<!\p{L})(?:dyredans|babyrytmik|rytmik)(?!\p{L})/iu.test(String(e.title ?? "")));
+    if (/(?<!\p{L})(?:fest|fester|party|parties)(?!\p{L})/u.test(low)) {
+      const isParty = (e: any) => /fest|party|klubaften|(?<!\p{L})dj(?!\p{L})|halloween|natklub|rave|disco|boots/iu.test(`${e.title ?? ""} ${(Array.isArray(e.interest_tags) ? e.interest_tags.join(" ") : "")}`);
+      events = events.filter(isParty);
+    }
+  }
+  const fbOut: any = formatFallbackReply(intent, places, events, language, relaxed);
+  // R46: places carry no admission price; "gratis" cannot be confirmed for them.
+  if (intent.free && events.length === 0 && places.length > 0 && typeof fbOut.reply === "string") {
+    fbOut.reply = (language === "en" ? "The catalogue has no admission prices for places, so I can't confirm which are free. Places matching your search:\n" : "Kataloget har ikke entrépriser for steder, så jeg kan ikke bekræfte, hvilke der er gratis. Steder, der matcher din søgning:\n") + fbOut.reply.split("\n").filter((l: string) => /^\s*•/.test(l)).join("\n");
+  }
+  return jsonResponse(fbOut);
 }
 
 /**
