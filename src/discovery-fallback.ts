@@ -630,7 +630,7 @@ export function formatFallbackReply(
   // list without a city comes from the whole country.
   const enIntro = language === "en";
   const contextIntro = selectedEvents.length > 0 && selectedPlaces.length === 0
-    ? `${enIntro ? "Here are events" : "Her er events"}${intent.city ? (enIntro ? ` in ${intent.city}` : ` i ${intent.city}`) : (enIntro ? " from across the catalogue" : " fra hele landet")}${intent.dateWindow && !relaxed.includes("date") ? ` ${intent.dateWindow.label}` : ""}:`
+    ? `${intent.eventCategory === "musik" ? (enIntro ? "Here are concerts" : "Her er koncerter") : enIntro ? "Here are events" : "Her er events"}${intent.city ? (enIntro ? ` in ${intent.city}` : ` i ${intent.city}`) : (enIntro ? " from across the catalogue" : " fra hele landet")}${intent.dateWindow && !relaxed.includes("date") ? ` ${intent.dateWindow.label}` : ""}:`
     : copy.intro;
   return {
     reply: lines.length > 0

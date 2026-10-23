@@ -196,3 +196,24 @@ describe("R45: degraded place answers match the asked kind", () => {
     expect(body.reply).not.toContain("Kongelundsdal");
   });
 });
+
+describe("R46: degraded topic filters", () => {
+  it("koncerter drop toddler classes and say koncerter; fest keeps parties only", async () => {
+    vi.mocked(queries.searchEvents).mockResolvedValue({ results: [
+      { id: "a", title: "Dyredans & Fede Forhindringer (2-5 år)", location: "Prismen, København", date: "3. nov", date_raw: "2026-11-03T14:35:00Z", category: "musik", interest_tags: ["musik"] },
+      { id: "b", title: "Peter Ingemann", location: "Drop inn, København", date: "2. nov", date_raw: "2026-11-02T20:00:00Z", category: "musik", interest_tags: ["musik"] },
+    ] } as any);
+    const aiRun = vi.fn().mockRejectedValue(new Error("Workers AI 500 upstream"));
+    const body: any = await (await worker.fetch!(chatRequest("koncerter i København i næste måned"), environment(aiRun), executionContext())).json();
+    expect(body.reply).toMatch(/^Her er koncerter/);
+    expect(body.reply).not.toContain("Dyredans");
+    expect(body.reply).toContain("Peter Ingemann");
+    vi.mocked(queries.searchEvents).mockResolvedValue({ results: [
+      { id: "c", title: "CyberSkills Bootcamp", location: "Aarhus", date_raw: "2026-10-24T08:00:00Z", interest_tags: ["kursus"] },
+      { id: "d", title: "SingleFest i Aarhus", location: "Aarhus", date_raw: "2026-10-24T17:30:00Z", interest_tags: ["social"] },
+    ] } as any);
+    const b2: any = await (await worker.fetch!(chatRequest("fest i Aarhus lørdag"), environment(aiRun), executionContext())).json();
+    expect(b2.reply).toContain("SingleFest");
+    expect(b2.reply).not.toContain("CyberSkills");
+  });
+});
