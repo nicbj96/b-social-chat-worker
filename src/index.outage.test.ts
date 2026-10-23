@@ -217,3 +217,17 @@ describe("R46: degraded topic filters", () => {
     expect(b2.reply).not.toContain("CyberSkills");
   });
 });
+
+describe("R47: festival questions", () => {
+  it("say festivaler and drop beer tours", async () => {
+    vi.mocked(queries.searchEvents).mockResolvedValue({ results: [
+      { id: "a", title: "GUIDEDE ØLTOURS PÅ SKØL FESTIVAL 2026", location: "København", date_raw: "2026-10-24T12:00:00Z", category: "kultur-kunst", interest_tags: ["kulturevents"] },
+      { id: "b", title: "FOBURGH – Faaborg Internationale Historie Festival", location: "Faaborg", date_raw: "2026-10-24T09:00:00Z", category: "kultur-kunst", interest_tags: ["kulturevents"] },
+    ] } as any);
+    const aiRun = vi.fn().mockRejectedValue(new Error("Workers AI 500 upstream"));
+    const body: any = await (await worker.fetch!(chatRequest("festival i Danmark"), environment(aiRun), executionContext())).json();
+    expect(body.reply).toMatch(/^Her er festivaler/);
+    expect(body.reply).toContain("FOBURGH");
+    expect(body.reply).not.toContain("ØLTOURS");
+  });
+});
