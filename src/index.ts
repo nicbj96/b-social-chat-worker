@@ -1364,7 +1364,22 @@ async function directDiscoveryFallback(
         ...(intent.topicWords || []).filter((w) => ["café", "bar", "legeplads", "marked"].includes(w)),
         ...(/(?<!\p{L})restaurant\p{L}*|spisested\p{L}*/u.test(low) ? ["restaurant"] : []),
       ]));
-      if (kinds.length) places = places.filter((p: any) => kinds.some((k) => topicWordHit(p, k) || String(p?.name ?? "").toLowerCase().includes(k === "museum" ? "muse" : k)));
+      const fold = (x: string) => x.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const NEEDLES: Record<string, string[]> = { "café": ["cafe", "kaffe", "coffee"], museum: ["muse"], restaurant: ["restaurant", "spisehus", "brasserie", "bistro"], bar: ["bar"] };
+      const hit = (p: any) => kinds.some((k) => topicWordHit(p, k) || (NEEDLES[k] ?? [fold(k)]).some((n) => fold(String(p?.name ?? "")).includes(n)));
+      if (kinds.length) {
+        places = places.filter(hit);
+        // R50: the category page may hold no cafés at all — look them up by name.
+        if (!places.length && intent.city) {
+          try {
+            const byName = await Promise.race([
+              searchPlaces(supabase, { city: intent.city, name_like: kinds.flatMap((k) => NEEDLES[k] ?? [k]).join(",") } as any),
+              new Promise<any>((r) => setTimeout(() => r({ results: [] }), 2000)),
+            ]);
+            places = (byName?.results || []).filter(hit);
+          } catch { /* honest empty stands */ }
+        }
+      }
     }
   }
   // R45: a multi-day window ("i weekenden") shows every day, not just tonight.
@@ -1915,6 +1930,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
     // A turn that hit the wall clock mid-tools gets an HONEST PARTIAL answer:
     // only what the tools actually retrieved, with the deadline declared.
     let deadlineHitMidTools = false;
+    let deadlineHitInTool = false; // R50: a hung DB call means the catalogue is the slow part
     let rowsCapped = false;
 
     // If the model wants to call tools, execute them
@@ -1958,7 +1974,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
               // Plan §9 P188: a tool that would start after the wall clock
               // expired must not start. The turn degrades honestly below.
               if (deadline.expired()) {
-                deadlineHitMidTools = true;
+                deadlineHitMidTools = true; deadlineHitInTool = true;
                 toolResultErrors.push("turn_deadline_exceeded");
                 break;
               }
@@ -2057,7 +2073,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                         if (vec) assertEmbeddingDims(vec);
                       } catch (err) {
                         if (err instanceof TurnBudgetExceeded) out.events_error = "budget_exhausted_embedding_calls";
-                        else if (err instanceof TurnDeadlineExceeded) { out.events_error = "turn_deadline_exceeded"; deadlineHitMidTools = true; }
+                        else if (err instanceof TurnDeadlineExceeded) { out.events_error = "turn_deadline_exceeded"; deadlineHitMidTools = true; deadlineHitInTool = true; }
                         else if (err instanceof ResourceCapExceeded) { out.events_error = `cap_exceeded_${err.cap}`; vec = undefined; }
                         else { console.error("Events embedding failed:", err); }
                       }
@@ -2516,7 +2532,7 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
               } catch (toolErr) {
                 if (toolErr instanceof TurnDeadlineExceeded) {
                   console.error(JSON.stringify({ event: "turn_deadline_exceeded", phase: "tool_call", tool: fnName }));
-                  deadlineHitMidTools = true;
+                  deadlineHitMidTools = true; deadlineHitInTool = true;
                   toolResultErrors.push("turn_deadline_exceeded");
                   break;
                 }
@@ -2662,6 +2678,21 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
       // groundModelReply with empty model text renders ONLY verified rows.
       let grounded: { reply: string; grounding: string; corrections: string[] };
       let deadlineDegradation: ReturnType<typeof degradationNotice> | undefined;
+      // R50: a slow model must not leave a discovery question with only an
+      // apology — the deterministic catalogue answer is complete and filtered.
+      // Bounded: if the catalogue is the slow part, the honest partial stands.
+      if (deadlineHitMidTools && !deadlineHitInTool && turnDiscovery(userMessages, ctx)) {
+        const fb = await Promise.race([
+          catalogueFallbackForTurn(env, userMessages, ctx, { reason: "turn_deadline_exceeded" }).catch(() => null),
+          new Promise<null>((r) => setTimeout(() => r(null), 2500)),
+        ]);
+        if (fb) {
+          try {
+            const body: any = await fb.clone().json();
+            if ((body?.event_ids?.length || 0) + (body?.place_ids?.length || 0) > 0) return jsonResponse({ ...body, partial: true });
+          } catch { /* keep the partial */ }
+        }
+      }
       if (deadlineHitMidTools) {
         const partial = groundModelReply("", groundedSources, { lang: replyLang, retrievalError: namedError ?? null });
         deadlineDegradation = degradationNotice("turn_deadline_exceeded");
