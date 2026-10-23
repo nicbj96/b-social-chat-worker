@@ -231,3 +231,17 @@ describe("R47: festival questions", () => {
     expect(body.reply).not.toContain("ØLTOURS");
   });
 });
+
+describe("R48: bar questions", () => {
+  it("drop webinars and dinners", async () => {
+    vi.mocked(queries.searchEvents).mockResolvedValue({ results: [
+      { id: "a", title: "Winemaker's Dinner med Domaine X", location: "Vinbaren, København", date_raw: "2026-10-24T17:00:00Z", interest_tags: ["bar"] },
+      { id: "b", title: "Digital Twin webinar", location: "Vinbaren, København", date_raw: "2026-10-24T08:00:00Z", interest_tags: ["bar"] },
+      { id: "c", title: "Quiz night", location: "Bar X, København", date_raw: "2026-10-24T19:00:00Z", interest_tags: ["bar"] },
+    ] } as any);
+    const aiRun = vi.fn().mockRejectedValue(new Error("Workers AI 500 upstream"));
+    const body: any = await (await worker.fetch!(chatRequest("bar København"), environment(aiRun), executionContext())).json();
+    expect(body.reply).toContain("Quiz night");
+    expect(body.reply).not.toMatch(/Dinner|webinar/);
+  });
+});
