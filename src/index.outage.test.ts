@@ -1,3 +1,4 @@
+import * as queries from "./supabase-queries";
 // Third-party outage — chaos coverage for the grounding safety net.
 //
 // The worker's contract is that a Workers-AI outage degrades to a grounded
@@ -183,5 +184,15 @@ describe("R44: named genre in the degraded path", () => {
     const response = await worker.fetch!(chatRequest("hip hop København fredag"), environment(aiRun), executionContext());
     const body: any = await response.json();
     expect(body.reply).toMatch(/ingen hiphop/i);
+  });
+});
+
+describe("R45: degraded place answers match the asked kind", () => {
+  it("techno in Copenhagen never answers with nature areas", async () => {
+    vi.mocked(queries.searchPlaces).mockResolvedValueOnce({ results: [{ id: "p1", name: "Kongelundsdal", city: "København", tags: ["natur"] }] } as any);
+    vi.mocked(queries.searchEvents).mockResolvedValue({ results: [] } as any);
+    const aiRun = vi.fn().mockRejectedValue(new Error("Workers AI 500 upstream"));
+    const body: any = await (await worker.fetch!(chatRequest("techno in Copenhagen"), environment(aiRun), executionContext())).json();
+    expect(body.reply).not.toContain("Kongelundsdal");
   });
 });
