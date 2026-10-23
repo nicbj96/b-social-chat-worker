@@ -14,6 +14,7 @@ import {
   looksUngroundedDiscoveryReply,
   repairContradictoryGroundedReply,
   searchEventsRelaxing,
+  rowIsGenre,
 } from "./discovery-fallback";
 
 describe("inferResponseLanguage", () => {
@@ -674,5 +675,12 @@ describe("R49: everyday words are not towns", () => {
     expect(inferDiscoveryIntent("hvad sker der næste måned", undefined, now)?.city).toBeUndefined();
     expect(inferDiscoveryIntent("teater i Næstved", undefined, now)?.city).toBe("Næstved");
     expect(inferDiscoveryIntent("koncerter i Aarhuss", undefined, now)?.city).toBe("Aarhus");
+  });
+});
+
+describe("R51: genre from catalogue tag string", () => {
+  it("a row tagged rock (joined tags) is rock; a musical is not", () => {
+    expect(rowIsGenre({ title: "Spawner + Æblerov", description: "indierock-trio", tags: "rock, musik-lyd, koncert" }, "rock")).toBe(true);
+    expect(rowIsGenre({ title: "TINA – The Tina Turner Musical", tags: "rock, musik-lyd" }, "rock")).toBe(false);
   });
 });
