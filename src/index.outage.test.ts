@@ -245,3 +245,19 @@ describe("R48: bar questions", () => {
     expect(body.reply).not.toMatch(/Dinner|webinar/);
   });
 });
+
+describe("R52: bullets are the catalogue rows, by date", () => {
+  it("replaces a dateless, '+'-prefixed model list with dated rows in order", async () => {
+    vi.mocked(queries.searchEvents).mockResolvedValue({ results: [
+      { id: "b", title: "Guys and Dolls", location: "Det Ny Teater, København V", date: "2026-11-01T14:00:00Z", category: "kultur-kunst", interest_tags: ["teater"] },
+      { id: "a", title: "Kejserinden", location: "Bådteatret, København K", date: "2026-10-30T19:30:00Z", category: "kultur-kunst", interest_tags: ["teater"] },
+    ] } as any);
+    const aiRun = vi.fn()
+      .mockResolvedValueOnce({ tool_calls: [{ id: "t1", function: { name: "search_events", arguments: JSON.stringify({ city: "København", tags: "teater" }) } }] })
+      .mockResolvedValueOnce({ response: "Her er teater:\n\n• + Guys and Dolls kl. 15.00\n + Keiserinden kl. 20.30\n\nVil du vide mere?" });
+    const body: any = await (await worker.fetch!(chatRequest("teater København næste weekend"), environment(aiRun), executionContext())).json();
+    expect(body.reply).not.toMatch(/\+ /);
+    expect(body.reply.indexOf("Kejserinden")).toBeGreaterThan(-1);
+    expect(body.reply.indexOf("Kejserinden")).toBeLessThan(body.reply.indexOf("Guys and Dolls"));
+  });
+});
