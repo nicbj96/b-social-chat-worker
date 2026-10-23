@@ -1374,7 +1374,9 @@ async function directDiscoveryFallback(
     for (const e of events) { const d = dayOf(e); byDay.set(d, [...(byDay.get(d) || []), e]); }
     const days = [...byDay.keys()].sort(); const mixed: any[] = [];
     for (let i = 0; mixed.length < events.length; i++) for (const d of days) { const r = byDay.get(d)![i]; if (r) mixed.push(r); }
-    events = mixed;
+    // R48: keep every day represented, but read chronologically.
+    const t = (e: any) => Date.parse(e.date_raw ?? e.date ?? "") || 0;
+    events = [...mixed.slice(0, 8).sort((x, y) => t(x) - t(y)), ...mixed.slice(8)];
   }
   // "techno" → "og i Aarhus?": the genre still rules; no shelters or comedy.
   const fbGenre = chainGenre(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")));
@@ -1404,6 +1406,8 @@ async function directDiscoveryFallback(
     const low = String(latestMessage || "").toLowerCase();
     const kidsAsked = intent.eventCategory === "familie" || /b[øo]rn|kids|famil/u.test(low);
     if (intent.eventCategory === "musik" && !kidsAsked) events = events.filter((e: any) => !/\(\s*\d+\s*[-–]\s*\d+\s*år\s*\)|(?<!\p{L})(?:dyredans|babyrytmik|rytmik)(?!\p{L})/iu.test(String(e.title ?? "")));
+    // R48: a bar question wants a night out, not a webinar or a set-menu dinner.
+    if (/(?<!\p{L})(?:bar|barer|bars|vinbar|ølbar|cocktailbar)(?!\p{L})/u.test(low)) events = events.filter((e: any) => !/webinar|dinner|middag|menu|kursus|course|workshop|foredrag|konference|seminar|digital twin/iu.test(String(e.title ?? "")));
     // R47: "festival" means festivals, not beer tours or concerts that merely mention one.
     if (/(?<!\p{L})festival(?:er|s)?(?!\p{L})/u.test(low)) events = events.filter((e: any) => /festival/iu.test(String(e.title ?? "")) && !/(?<!\p{L})(?:tours?|guided|guidede)(?!\p{L})/iu.test(String(e.title ?? "")));
     if (/(?<!\p{L})(?:fest|fester|party|parties)(?!\p{L})/u.test(low)) {
