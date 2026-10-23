@@ -339,7 +339,7 @@ export function isDiscoverySeekingMessage(message: string): boolean {
 }
 
 export type Relaxation = "date" | "category";
-export type EventFilters = { city?: string; category?: string; tags?: string; date_from?: string; date_to?: string; free?: boolean; country?: string };
+export type EventFilters = { title_like?: string; city?: string; category?: string; tags?: string; date_from?: string; date_to?: string; free?: boolean; country?: string };
 
 /**
  * Event search that loosens gradually instead of answering empty while the
@@ -375,6 +375,16 @@ export async function searchEventsRelaxing(
   if (tws.length && !base.tags) {
     const tagged = { ...base, category: undefined, tags: topicTagList(tws).join(",") };
     steps.unshift(...(intent.dateWindow ? [{ filters: { ...tagged, date_from: intent.dateWindow.from, date_to: intent.dateWindow.to }, relaxed: [] as Relaxation[] }] : [{ filters: tagged, relaxed: [] as Relaxation[] }]));
+  }
+  // R44: then the same topic by title, for rows the source tagged elsewhere.
+  {
+    const kids = intent.eventCategory === "familie";
+    const words = [...tws.filter((w) => w.length >= 4), ...(kids ? ["børn", "familie", "mindste", "tweens", "kids"] : [])];
+    if (words.length) {
+      const titled: EventFilters = { ...base, category: undefined, tags: undefined, title_like: Array.from(new Set(words)).join(",") };
+      const at = tws.length && !base.tags ? 1 : 0;
+      steps.splice(at + 1, 0, { filters: { ...titled, ...(intent.dateWindow ? { date_from: intent.dateWindow.from, date_to: intent.dateWindow.to } : {}) }, relaxed: [] });
+    }
   }
   // R27: the reader named a day; other days are not an answer to it.
   if (hasCategory && false) {

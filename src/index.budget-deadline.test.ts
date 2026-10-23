@@ -385,7 +385,7 @@ describe("budget/deadline — response byte cap on ALL reply paths", () => {
   });
 
   it("degraded fallback path is byte-capped and flagged too", async () => {
-    vi.mocked(queries.searchEvents).mockResolvedValueOnce({ results: [{ ...DB_EVENT, title: "T".repeat(300_000) }] } as any);
+    vi.mocked(queries.searchEvents).mockResolvedValueOnce({ results: [{ ...DB_EVENT, title: "Jazz " + "T".repeat(300_000) }] } as any);
     const aiRun = vi.fn().mockRejectedValue(new Error("Workers AI 500 upstream"));
     const response = await worker.fetch!(chatRequest("jazz i Aarhus?"), baseEnv(aiRun), executionContext());
     const text = await response.text();

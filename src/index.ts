@@ -1336,6 +1336,9 @@ async function directDiscoveryFallback(
     relaxed = result.relaxed;
     if (result.error) failed = true;
     events = result.results || [];
+    // R44: "hip hop København fredag" — a named genre is a filter, never a
+    // suggestion; rows of other genres give an honest empty answer instead.
+    { const g = namedGenre(latestMessage) ?? intent.namedGenre ?? null; if (g && GENRES[g]) events = events.filter((e: any) => rowIsGenre(e, g)); }
     // R27: "i morgen" must not list tonight's concert that merely ends after
     // midnight; keep started rows only when they are genuine multi-day runs.
     const fromMs = intent.dateWindow ? Date.parse(intent.dateWindow.from) : NaN;

@@ -100,6 +100,18 @@ export function resolveDateWindow(message: string, now: Date = new Date()): Date
     };
   }
 
+  // R44: "næste måned" / "next month" = the whole next calendar month.
+  if (/(?<!\p{L})(?:i\s+)?(?:næste|naeste|kommende)\s+måned(?!\p{L})|(?<!\p{L})next\s+month(?!\p{L})/iu.test(text)) {
+    const y = today.m === 12 ? today.y + 1 : today.y, m = today.m === 12 ? 1 : today.m + 1;
+    const y2 = m === 12 ? y + 1 : y, m2 = m === 12 ? 1 : m + 1;
+    return { from: new Date(localInstant({ y, m, d: 1 })).toISOString(), to: new Date(localInstant({ y: y2, m: m2, d: 1 })).toISOString(), label: "næste måned" };
+  }
+  // R44: "næste weekend" = the weekend after this one.
+  if (/(?<!\p{L})(?:næste|naeste|next)\s+weekend(?!\p{L})/iu.test(text)) {
+    const friday = addDays(today, today.dow === 0 ? -2 : today.dow === 6 ? -1 : 5 - today.dow);
+    const nf = addDays(friday, 7);
+    return { from: new Date(localInstant(nf, 17)).toISOString(), to: new Date(localInstant(addDays(nf, 3))).toISOString(), label: "næste weekend" };
+  }
   // Explicit day: "15. oktober", "den 15 okt", "15/10", "october 15", "15 october".
   const MONTHS: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, maj: 5, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, okt: 10, oct: 10, nov: 11, dec: 12 };
   const mName = "(jan|feb|mar|apr|maj|may|jun|jul|aug|sep|okt|oct|nov|dec)\\p{L}*";

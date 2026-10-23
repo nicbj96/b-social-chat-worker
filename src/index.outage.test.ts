@@ -176,3 +176,12 @@ describe("R44: model down on short catalogue questions", () => {
     expect(body.tool_calls_made).toContain("direct_discovery_fallback");
   });
 });
+
+describe("R44: named genre in the degraded path", () => {
+  it("hip hop with only non-hip-hop rows is an honest empty answer", async () => {
+    const aiRun = vi.fn().mockRejectedValue(new Error("Workers AI 500 upstream"));
+    const response = await worker.fetch!(chatRequest("hip hop København fredag"), environment(aiRun), executionContext());
+    const body: any = await response.json();
+    expect(body.reply).toMatch(/ingen hiphop/i);
+  });
+});
