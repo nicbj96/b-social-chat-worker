@@ -2095,6 +2095,26 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                         const turnIntent = turnDiscovery(userMessages, ctx).intent;
                         const turnWindow = turnIntent.dateWindow;
                         out.events = narrowSemanticEvents(out.events || [], bbox, turnWindow, 25, fnArgs.city);
+                        // R51: "workshop København" — semantic ranking is not date order; the
+                        // nearest workshops (titled, not tagged, as such) must be included.
+                        if (!turnIntent.queryTag && (turnIntent.topicWords || []).length && !out.events_error) {
+                          try {
+                            const tr: any = await Promise.race([
+                              searchEvents(createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY), {
+                                ...(fnArgs.city ? { city: fnArgs.city } : {}),
+                                ...(turnWindow ? { date_from: turnWindow.from, date_to: turnWindow.to } : {}),
+                                title_like: (turnIntent.topicWords || []).join(","),
+                              } as any),
+                              new Promise((r) => setTimeout(() => r({ results: [] }), 2000)),
+                            ]);
+                            const seen = new Set((out.events || []).map((e: any) => e.id));
+                            const extra = (tr?.results || []).filter((e: any) => e?.id && !seen.has(e.id));
+                            if (extra.length) {
+                              const t = (e: any) => Date.parse(e.date_raw ?? e.date ?? "") || Number.MAX_SAFE_INTEGER;
+                              out.events = [...extra, ...(out.events || [])].sort((x: any, y: any) => t(x) - t(y)).slice(0, 25);
+                            }
+                          } catch { /* semantic rows stand */ }
+                        }
                         // A named genre ("jazz") must be what we answer with:
                         // keep rows that mention it, top up from the tag search.
                         if (turnIntent.queryTag && !out.events_error) {
