@@ -2764,6 +2764,21 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
         grounded = { ...grounded, reply: `${replyLang === "en" ? "The catalogue has no admission prices for places, so I can't confirm which are free. Places matching your search:" : "Kataloget har ikke entrépriser for steder, så jeg kan ikke bekræfte, hvilke der er gratis. Steder der passer på din søgning:"}\n${String(grounded.reply || "").replace(/^[^\n•]*:\s*\n/, "")}` };
       }
 
+      // R53: "koncerter" are not toddler classes ("Lørdagsrytmik 1-2 år") unless kids were asked for.
+      {
+        const tdK = turnDiscovery(userMessages, ctx).intent;
+        const lowK = userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")).join(" ").toLowerCase();
+        const kidsAsked = tdK.eventCategory === "familie" || /b[øo]rn|kids|famil|baby|småbørn/u.test(lowK);
+        if (tdK.eventCategory === "musik" && !kidsAsked && collectedEvents.length) {
+          const isKid = (e: any) => /\d+\s*[-–]\s*\d+\s*(?:år|mdr)|(?<!\p{L})(?:rytmik|babyrytmik|dyredans|jungletrommer|for de mindste|gæt et dyr|glawokl)(?!\p{L})/iu.test(String(e?.title ?? "")) || String(e?.category ?? "") === "børn-familie";
+          const drop = new Set((collectedEvents as any[]).filter(isKid).map((e) => String(e.id)));
+          if (drop.size && drop.size < collectedEvents.length) {
+            for (let i = collectedEvents.length - 1; i >= 0; i--) if (drop.has(String((collectedEvents as any[])[i].id))) collectedEvents.splice(i, 1);
+            for (let i = collectedEventIds.length - 1; i >= 0; i--) if (drop.has(String(collectedEventIds[i]))) collectedEventIds.splice(i, 1);
+            grounded = { ...grounded, reply: String(grounded.reply || "").split("\n").filter((l) => !(/^[ \t]*(?:[•*\-]|\d+\.)[ \t]+/.test(l) && /\d+\s*[-–]\s*\d+\s*(?:år|mdr)|rytmik|dyredans|jungletrommer|for de mindste|gæt et dyr|glawokl/iu.test(l))).join("\n") };
+          }
+        }
+      }
       // R30: bullets and cards are the same set; no blanket claims over the list.
       if (!deadlineHitMidTools && (collectedEvents.length || collectedPlaces.length)) {
         grounded = { ...grounded, reply: syncBulletsToItems(String(grounded.reply || ""), [...collectedEvents, ...collectedPlaces] as any[]) };
