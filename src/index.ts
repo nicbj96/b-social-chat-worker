@@ -2780,7 +2780,22 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
               for (const e of missing) { const r = byId.get(String(e.id)); if (r) { e.price = eventPriceLabel(r.price === null || r.price === undefined ? null : Number(r.price), r.price_currency); } }
             } catch { /* keep "Pris ukendt" */ }
           }
-          grounded = { ...grounded, reply: renderEventBullets(String(grounded.reply || ""), collectedEvents as any[], replyLang) };
+          grounded = { ...grounded, reply: renderEventBullets(String(grounded.reply || "").replace(/^[ \t]*(?:[•*\-][ \t]*)?\+[ \t]+/gm, "• "), collectedEvents as any[], replyLang) };
+          // R52: bullets ARE the cards. The model's own list ("• + Keiserinden kl. 20.30",
+          // out of order, no dates) is replaced by the catalogue rows, by date.
+          if (!collectedPlaces.length) {
+            const lines = String(grounded.reply || "").split("\n");
+            const isB = (l: string) => /^[ \t]*(?:[•*\-]|\d+\.)[ \t]+\S/.test(l);
+            const first = lines.findIndex(isB);
+            if (first >= 0) {
+              let last = first; for (let i = first; i < lines.length; i++) { if (isB(lines[i]) || (/^\s*\+?\s*\S/.test(lines[i]) && i + 1 < lines.length && isB(lines[i + 1]))) last = i; else if (lines[i].trim() === "") { if (!lines.slice(i + 1).some(isB)) break; } else if (!isB(lines[i])) break; }
+              const t = (e: any) => Date.parse(e.date_raw ?? e.date ?? "") || Number.MAX_SAFE_INTEGER;
+              const seen = new Set<string>();
+              const rows = [...(collectedEvents as any[])].filter((e) => { const k = String(e?.id ?? e?.title); if (seen.has(k)) return false; seen.add(k); return e?.title; }).sort((x, y) => t(x) - t(y)).slice(0, 8);
+              const rendered = renderEventBullets(rows.map((e) => `• ${e.title}`).join("\n"), rows, replyLang);
+              grounded = { ...grounded, reply: [...lines.slice(0, first), rendered, ...lines.slice(last + 1)].join("\n") };
+            }
+          }
         }
       }
       // R41: a list cut at one page says so ("d1 stops at 8 shows").
