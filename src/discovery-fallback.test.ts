@@ -666,3 +666,13 @@ describe("places in the fallback carry ids, sources and coordinates", () => {
     expect(out.sources[1].verified_fields.longitude).toBeNull();
   });
 });
+
+describe("R49: everyday words are not towns", () => {
+  it("næste weekend never becomes Næstved", () => {
+    const now = new Date("2026-10-23T18:00:00Z");
+    expect(inferDiscoveryIntent("teater i næste weekend", undefined, now)?.city).toBeUndefined();
+    expect(inferDiscoveryIntent("hvad sker der næste måned", undefined, now)?.city).toBeUndefined();
+    expect(inferDiscoveryIntent("teater i Næstved", undefined, now)?.city).toBe("Næstved");
+    expect(inferDiscoveryIntent("koncerter i Aarhuss", undefined, now)?.city).toBe("Aarhus");
+  });
+});
