@@ -108,6 +108,12 @@ export async function searchEvents(
     const tagList = args.tags.split(",").map((t) => t.trim().toLowerCase());
     query = query.overlaps("interest_tags", tagList);
   }
+  // R44: a topic the source tagged differently ("Skriveworkshop" under social-hobby,
+  // "Film for de mindste" under film) is still found by its title.
+  if (typeof (args as any).title_like === "string" && (args as any).title_like.trim()) {
+    const needles = String((args as any).title_like).split(",").map((t: string) => t.trim().replace(/[%,()*]/g, "")).filter(Boolean).slice(0, 8);
+    if (needles.length) query = query.or(needles.map((t: string) => `title.ilike.*${t}*`).join(","));
+  }
   if ((args as any).free === true) query = query.eq("price", 0);
   if (typeof (args as any).country === "string" && /^[A-Z]{2}$/.test((args as any).country)) query = query.eq("country", (args as any).country);
 

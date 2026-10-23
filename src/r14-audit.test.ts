@@ -612,3 +612,20 @@ describe("r41e", () => {
     expect(renderEventBullets("• Mr Woofmantic Games & Jazz på Kildevæld kl. 19.00", [{ title: "Mr Woofmantic Games & Jazz 2026", location: "Kildevæld Kulturcenter, København", date: "2026-11-20T18:00:00Z", price: "135 DKK" }] as any, "da")).toBe("• Mr Woofmantic Games & Jazz 2026 — Kildevæld Kulturcenter, København — fredag den 20. november kl. 19.00 — 135 DKK");
   });
 });
+describe("r44b", () => {
+  it("næste måned and næste weekend", () => {
+    const now = new Date("2026-10-23T14:00:00Z");
+    const m = resolveDateWindow("koncerter i København i næste måned", now)!;
+    expect(m.from).toBe("2026-10-31T23:00:00.000Z"); expect(m.to).toBe("2026-11-30T23:00:00.000Z");
+    const w = resolveDateWindow("teater København næste weekend", now)!;
+    expect(w.from).toBe("2026-10-30T16:00:00.000Z");
+  });
+});
+import { searchEventsRelaxing as serR44, inferDiscoveryIntent as idiR44 } from "./discovery-fallback";
+describe("r44c", () => {
+  it("workshop København finds title matches the source tagged social-hobby", async () => {
+    const intent = idiR44("workshop København");
+    const r = await serR44(intent, async (f: any) => f.title_like?.includes("workshop") ? { results: [{ id: "w", title: "Skriveworkshop: Fantasy" }] } : { results: [] });
+    expect(r.results.map((x: any) => x.id)).toEqual(["w"]);
+  });
+});

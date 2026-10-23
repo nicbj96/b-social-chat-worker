@@ -602,7 +602,9 @@ describe("audit #1: date-aware intent and gradual relaxation", () => {
       return f.category || f.date_from ? { results: [] } : { results: [{ id: "e1", title: "X" }] };
     });
     // R27: the category is never dropped — off-topic rows are worse than an honest empty.
-    expect(calls.map((c) => [Boolean(c.date_from), c.category])).toEqual([[true, "familie"]]);
+    expect(calls.map((c) => [Boolean(c.date_from), c.category])[0]).toEqual([true, "familie"]);
+    // R44: the only other step searches the same topic by title, with the day kept.
+    expect(calls.slice(1).every((c) => c.date_from && /børn/.test(c.title_like ?? ""))).toBe(true);
     expect(calls.every((c) => c.city === "Aarhus")).toBe(true);
     expect(r.results).toEqual([]);
   });
