@@ -1352,6 +1352,30 @@ async function directDiscoveryFallback(
     }
   }
 
+  // R45: places must be the kind the reader asked for. A genre ("techno",
+  // "elektronisk musik") is an event question — nature areas or concert halls
+  // are no answer to it; "museer"/"restauranter" keep only matching places.
+  if (places.length) {
+    const low = String(latestMessage || "").toLowerCase();
+    if (namedGenre(latestMessage)) places = [];
+    else {
+      const kinds = Array.from(new Set([
+        ...placeTopicsOf([latestMessage]),
+        ...(intent.topicWords || []).filter((w) => ["café", "bar", "legeplads", "marked"].includes(w)),
+        ...(/(?<!\p{L})restaurant\p{L}*|spisested\p{L}*/u.test(low) ? ["restaurant"] : []),
+      ]));
+      if (kinds.length) places = places.filter((p: any) => kinds.some((k) => topicWordHit(p, k) || String(p?.name ?? "").toLowerCase().includes(k === "museum" ? "muse" : k)));
+    }
+  }
+  // R45: a multi-day window ("i weekenden") shows every day, not just tonight.
+  if (intent.dateWindow && Date.parse(intent.dateWindow.to) - Date.parse(intent.dateWindow.from) > 30 * 3600 * 1000 && events.length > 1) {
+    const dayOf = (e: any) => new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Copenhagen" }).format(new Date(e.date_raw ?? e.date ?? 0));
+    const byDay = new Map<string, any[]>();
+    for (const e of events) { const d = dayOf(e); byDay.set(d, [...(byDay.get(d) || []), e]); }
+    const days = [...byDay.keys()].sort(); const mixed: any[] = [];
+    for (let i = 0; mixed.length < events.length; i++) for (const d of days) { const r = byDay.get(d)![i]; if (r) mixed.push(r); }
+    events = mixed;
+  }
   // "techno" → "og i Aarhus?": the genre still rules; no shelters or comedy.
   const fbGenre = chainGenre(userMessages.filter((m) => m.role === "user").map((m) => String(m.content ?? "")));
   if (fbGenre && !failed && userMessages.filter((m) => m.role === "user").length > 1) {
