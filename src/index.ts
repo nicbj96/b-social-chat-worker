@@ -50,7 +50,7 @@ import { rateLimitActorKey } from "./ratelimit";
 import { resolveChatTier } from "./plus-tier";
 import { syncBulletsToItems, idsNamedInReply, placeBulletsNameOnly, deadlineBullets, renderEventBullets } from "./card-sync";
 import { titleCandidates, detailOrdinal, listedTitles, pickTitle, renderEventDetail, renderPlaceDetail } from "./detail-followup";
-import { chainGenre, rowIsGenre, topicWordHit, nonGenreTopics, GENRES, honestEmptyReply, topicTagList, placeNameNeedles, placeTopicsOf } from "./discovery-fallback";
+import { chainGenre, rowIsGenre, topicWordHit, nonGenreTopics, GENRES, honestEmptyReply, topicTagList, placeNameNeedles, placeTopicsOf, namedGenre } from "./discovery-fallback";
 import { resolveTurnDiscovery, looksLikeEventListing, looksLikeUngroundedFact, clarifyDiscoveryReply } from "./discovery-fallback";
 import { aiBreakerIsOpen, searchEventsRelaxing, formatFallbackReply, formatNonCatalogueReply, inferDiscoveryIntent, inferResponseLanguage, isAiQuotaError, isDiscoverySeekingMessage, looksUngroundedDiscoveryReply, recordAiFailure, recordAiSuccess, repairContradictoryGroundedReply } from "./discovery-fallback";
 import type { DiscoveryIntent, Relaxation } from "./discovery-fallback";
@@ -1449,7 +1449,13 @@ async function catalogueFallbackForTurn(
   const withDegradation = (payload: any): any =>
     degradationField ? { ...payload, degraded: true, degradation: degradationField } : payload;
   const latest = latestUserMessage(userMessages);
-  if (!turnDiscovery(userMessages, context).seeking) {
+  // R44: when the model is down, a short question naming a place or a genre
+  // ("legepladser i Odense", "stand-up Aarhus", "festival i Danmark") is still a
+  // catalogue question — answer it from the catalogue, not with "prøv igen".
+  const shortPlaceQ = String(latest || "").trim().split(/\s+/).length <= 6
+    && !/^\s*(?:gem|husk|save|remember|slet|delete|tilføj|add)\b/iu.test(String(latest || ""))
+    && (/\b(kbh|cph|københavn|copenhagen|aarhus|århus|aalborg|ålborg|odense|roskilde|esbjerg|vejle|kolding|horsens|randers|danmark|denmark)\b/iu.test(String(latest)) || namedGenre(String(latest)) !== null);
+  if (!turnDiscovery(userMessages, context).seeking && !shortPlaceQ) {
     return jsonResponse(withDegradation(formatNonCatalogueReply(latest)), 200, extraHeaders);
   }
   const res = await directDiscoveryFallback(env, userMessages, context);

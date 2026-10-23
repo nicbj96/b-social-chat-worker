@@ -166,3 +166,13 @@ describe("third-party outage — Workers AI down", () => {
     expect(Array.isArray(body.place_ids)).toBe(true);
   });
 });
+
+describe("R44: model down on short catalogue questions", () => {
+  it.each(["legepladser i Odense", "stand-up Aarhus", "festival i Danmark"])("%s is answered from the catalogue, not 'prøv igen'", async (q) => {
+    const aiRun = vi.fn().mockRejectedValue(new Error("Workers AI 500 upstream"));
+    const response = await worker.fetch!(chatRequest(q), environment(aiRun), executionContext());
+    const body: any = await response.json();
+    expect(body.reply).not.toContain("prøv igen om lidt");
+    expect(body.tool_calls_made).toContain("direct_discovery_fallback");
+  });
+});
