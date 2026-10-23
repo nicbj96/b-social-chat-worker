@@ -2649,7 +2649,20 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
       if (!deadlineHitMidTools && (collectedEvents.length || collectedPlaces.length)) {
         grounded = { ...grounded, reply: syncBulletsToItems(String(grounded.reply || ""), [...collectedEvents, ...collectedPlaces] as any[]) };
         if (collectedPlaces.length) grounded = { ...grounded, reply: placeBulletsNameOnly(String(grounded.reply || ""), collectedPlaces as any[]) };
-        if (collectedEvents.length) grounded = { ...grounded, reply: renderEventBullets(String(grounded.reply || ""), collectedEvents as any[], replyLang) };
+        // R43: semantic rows carry no price; read it from the catalogue so the
+        // same event never shows "Pris ukendt" in one answer and 32.25 DKK in another.
+        if (collectedEvents.length) {
+          const missing = (collectedEvents as any[]).filter((e) => e?.id && e.price === undefined);
+          if (missing.length) {
+            try {
+              const q = createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_KEY).from("events").select("id, price, price_currency").in("id", missing.map((e) => String(e.id)).slice(0, 16));
+              const { data } = (await Promise.race([q, new Promise((r) => setTimeout(() => r({ data: [] }), 1500))])) as any;
+              const byId = new Map(((data || []) as any[]).map((r) => [String(r.id), r]));
+              for (const e of missing) { const r = byId.get(String(e.id)); if (r) { e.price = eventPriceLabel(r.price === null || r.price === undefined ? null : Number(r.price), r.price_currency); } }
+            } catch { /* keep "Pris ukendt" */ }
+          }
+          grounded = { ...grounded, reply: renderEventBullets(String(grounded.reply || ""), collectedEvents as any[], replyLang) };
+        }
       }
       // R41: a list cut at one page says so ("d1 stops at 8 shows").
       {
