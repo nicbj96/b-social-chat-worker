@@ -2095,6 +2095,11 @@ async function handleChatInner(request: Request, env: Env, executionCtx: Executi
                         const turnIntent = turnDiscovery(userMessages, ctx).intent;
                         const turnWindow = turnIntent.dateWindow;
                         out.events = narrowSemanticEvents(out.events || [], bbox, turnWindow, 25, fnArgs.city);
+                        // R51: inside a named window the reader scans by day — keep date order.
+                        if (turnWindow && Array.isArray(out.events)) {
+                          const t = (e: any) => Date.parse(e.date_raw ?? e.date ?? "") || Number.MAX_SAFE_INTEGER;
+                          out.events = [...out.events].sort((x: any, y: any) => t(x) - t(y));
+                        }
                         // R51: "workshop København" — semantic ranking is not date order; the
                         // nearest workshops (titled, not tagged, as such) must be included.
                         if (!turnIntent.queryTag && (turnIntent.topicWords || []).length && !out.events_error) {
