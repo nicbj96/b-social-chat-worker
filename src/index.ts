@@ -1338,7 +1338,16 @@ async function directDiscoveryFallback(
     events = result.results || [];
     // R44: "hip hop København fredag" — a named genre is a filter, never a
     // suggestion; rows of other genres give an honest empty answer instead.
-    { const g = namedGenre(latestMessage) ?? intent.namedGenre ?? null; if (g && GENRES[g]) events = events.filter((e: any) => rowIsGenre(e, g)); }
+    { const g = namedGenre(latestMessage) ?? intent.namedGenre ?? null; if (g && GENRES[g]) {
+      events = events.filter((e: any) => rowIsGenre(e, g));
+      // R51: the first 8 music rows by date may hold no rock at all — ask by genre tag.
+      if (events.length === 0 && !result.error) {
+        try {
+          const again = await searchEvents(supabase, { city: intent.city, tags: Array.from(new Set([g, ...(GENRES[g] ?? [])])).join(","), ...(intent.dateWindow ? { date_from: intent.dateWindow.from, date_to: intent.dateWindow.to } : {}) } as any);
+          events = ((again.results || []) as any[]).filter((e: any) => rowIsGenre(e, g));
+        } catch { /* honest empty stands */ }
+      }
+    } }
     // R27: "i morgen" must not list tonight's concert that merely ends after
     // midnight; keep started rows only when they are genuine multi-day runs.
     const fromMs = intent.dateWindow ? Date.parse(intent.dateWindow.from) : NaN;
