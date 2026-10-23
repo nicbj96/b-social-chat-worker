@@ -268,8 +268,14 @@ function editDistance(a: string, b: string, max: number): number {
  * real Danish towns, and a loose threshold would silently answer for the wrong
  * one -- worse than admitting we did not recognise it.
  */
+const FUZZY_CITY_STOPWORDS = new Set([
+  "næste", "næsten", "nærmeste", "nemme", "aftenen", "aftener", "weekend", "weekenden", "måned", "måneden",
+  "koncert", "koncerter", "teater", "events", "steder", "gratis", "lørdag", "søndag", "fredag", "mandag", "tirsdag", "onsdag", "torsdag",
+  "museer", "museum", "musik", "børn", "hvilke", "hvornår", "noget", "nogle", "rundt", "bedste", "starter", "slutter",
+]);
 function fuzzyCity(text: string): string | undefined {
-  const tokens = text.split(/[^\p{L}]+/u).filter((t) => t.length >= 5);
+  // R49: everyday words are never misspelt towns ("næste weekend" ≠ Næstved).
+  const tokens = text.split(/[^\p{L}]+/u).filter((t) => t.length >= 5 && !FUZZY_CITY_STOPWORDS.has(t.toLocaleLowerCase("da-DK")));
   if (!tokens.length) return undefined;
   for (const candidate of KNOWN_CITIES) {
     const folded = foldPlace(candidate);
